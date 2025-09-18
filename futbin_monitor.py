@@ -1,4 +1,53 @@
-import requests
+def check_and_send_startup_notification(self):
+        """Send startup notification only once per deployment"""
+        if self.startup_sent:
+            return
+        
+        # Create unique instance ID based on timestamp and process
+        instance_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+        
+        # Check if startup notification was sent recently (last 5 minutes)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        five_minutes_ago = datetime.now() - timedelta(minutes=5)
+        cursor.execute('''
+            SELECT COUNT(*) FROM startup_locks 
+            WHERE startup_time > ?
+        ''', (five_minutes_ago,))
+        
+        recent_startups = cursor.fetchone()[0]
+        
+        if recent_startups == 0:
+            # No recent startup, safe to send notification
+            try:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO startup_locks (instance_id, startup_time)
+                    VALUES (?, ?)
+                ''', (instance_id, datetime.now()))
+                
+                conn.commit()
+                
+                # Send startup notification
+                self.send_notification_to_all(
+                    f"🤖 Futbin Bot Started!\n"
+                    f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
+                    f"⚡ Running on cloud infrastructure\n"
+                    f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%\n"
+                    f"⏰ Alert cooldown: {Config.ALERT_COOLDOWN_MINUTES} minutes",
+                    "🚀 Bot Started"
+                )
+                
+                self.startup_sent = True
+                print("✅ Startup notification sent")
+                
+            except Exception as e:
+                print(f"Error sending startup notification: {e}")
+        else:
+            print(f"⚠️ Startup notification already sent recently, skipping...")
+            self.startup_sent = True
+        
+        conn.close()import requests
 import time
 import json
 import sqlite3
@@ -98,6 +147,7 @@ class FutbinPriceMonitor:
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:89.0) Gecko/20100101 Firefox/89.0'
         ]
         self.init_database()
+        self.startup_sent = False  # Flag to prevent duplicate startup messages
     
     def rotate_user_agent(self):
         """Rotate user agent to avoid detection"""
@@ -520,9 +570,10 @@ class FutbinPriceMonitor:
                 
                 # Progress notification every N pages (configurable)
                 if page % Config.PROGRESS_NOTIFICATION_INTERVAL == 0:
-                    self.send_telegram_notification(
+                    self.send_notification_to_all(
                         f"📊 Scraping Progress: {page}/{Config.PAGES_TO_SCRAPE} pages complete\n"
-                        f"💾 Total cards saved: {total_saved}"
+                        f"💾 Total cards saved: {total_saved}",
+                        "📊 Scraping Progress"
                     )
                 
                 # Random delay between pages (configurable)
@@ -534,11 +585,12 @@ class FutbinPriceMonitor:
                 continue
         
         print(f"🎉 Scraping complete! Total cards saved: {total_saved}")
-        self.send_telegram_notification(
+        self.send_notification_to_all(
             f"🎉 Futbin scraping complete!\n"
             f"📊 Pages scraped: {Config.PAGES_TO_SCRAPE}\n"
             f"💾 Total cards in database: {total_saved}\n"
-            f"🤖 Price monitoring will start now!"
+            f"🤖 Price monitoring will start now!",
+            "✅ Scraping Complete"
         )
         
         return total_saved
@@ -742,6 +794,40 @@ class FutbinPriceMonitor:
                 print(f"❌ Telegram error: {response.status_code}")
         except Exception as e:
             print(f"❌ Telegram error: {e}")
+    
+    def send_discord_general_notification(self, message, title="Futbin Price Monitor"):
+        """Send general Discord notification (non-trading alerts)"""
+        if not Config.DISCORD_WEBHOOK_URL:
+            return  # Discord not configured
+        
+        # Simple embed for general notifications
+        embed = {
+            "title": title,
+            "description": message,
+            "color": 0x0099ff,  # Blue color
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        payload = {
+            "embeds": [embed]
+        }
+        
+        try:
+            response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
+            if response.status_code == 204:
+                print("✅ Discord notification sent")
+            else:
+                print(f"❌ Discord error: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Discord error: {e}")
+    
+    def send_notification_to_all(self, message, title="Futbin Price Monitor"):
+        """Send notification to both Telegram and Discord"""
+        # Send to Telegram
+        self.send_telegram_notification(message)
+        
+        # Send to Discord
+        self.send_discord_general_notification(message, title)
     
     def send_price_alert(self, card_info, platform, gap_info):
         """Send price gap alert with proper trading calculations"""
@@ -973,12 +1059,13 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
                         continue
                 
                 # Send cycle completion notification
-                if alerts_sent > 0:
-                    self.send_telegram_notification(
+                if Config.SEND_CYCLE_SUMMARIES and alerts_sent > 0:
+                    self.send_notification_to_all(
                         f"📊 Monitoring cycle complete!\n"
                         f"🔍 Checked {len(cards)} cards\n"
                         f"🚨 Sent {alerts_sent} trading alerts\n"
-                        f"⏰ Next check in 45 minutes"
+                        f"⏰ Next check in {Config.MONITORING_CYCLE_INTERVAL} minutes",
+                        "📊 Cycle Complete"
                     )
                 else:
                     print(f"📊 Cycle complete - no trading opportunities found this round")
