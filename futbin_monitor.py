@@ -545,7 +545,7 @@ class FutbinPriceMonitor:
     def scrape_card_prices(self, futbin_url):
         """
         Scrape current BIN prices from a card's individual Futbin page
-        This is where we get the actual first/second lowest BIN prices
+        Target the exact price elements from the Market tab
         """
         try:
             self.rotate_user_agent()
@@ -557,111 +557,107 @@ class FutbinPriceMonitor:
             soup = BeautifulSoup(response.content, 'html.parser')
             prices = {'ps': [], 'xbox': [], 'pc': []}
             
-            print(f"💰 Extracting prices from: {futbin_url}")
+            print(f"💰 Extracting BIN prices from: {futbin_url}")
             
-            # Method 1: Look for price tables or containers
-            # The prices are usually in a specific section of the individual player page
+            # Target the exact price classes from the Market section
+            # First BIN price: class="price inline-with-icon lowest-price-1"
+            first_price_elem = soup.find(class_="price inline-with-icon lowest-price-1")
             
-            # Try to find price containers by common class patterns
-            price_containers = []
+            # Second BIN price: class="lowest-price inline-with-icon"  
+            second_price_elem = soup.find(class_="lowest-price inline-with-icon")
             
-            # Look for common price-related selectors
-            possible_selectors = [
-                '.price-container',
-                '.bin-prices',
-                '.market-prices', 
-                '.player-prices',
-                '[class*="price"]',
-                '.lowest-bin',
-                '.current-price'
-            ]
+            bin_prices = []
             
-            for selector in possible_selectors:
-                elements = soup.select(selector)
-                if elements:
-                    print(f"🔍 Found {len(elements)} elements with selector: {selector}")
-                    price_containers.extend(elements)
+            if first_price_elem:
+                try:
+                    first_price_text = first_price_elem.get_text(strip=True)
+                    first_price = self.parse_price_text(first_price_text)
+                    if first_price > 0:
+                        bin_prices.append(first_price)
+                        print(f"💰 First BIN: {first_price:,} coins")
+                except Exception as e:
+                    print(f"Error parsing first price: {e}")
             
-            # Method 2: Look for any elements containing price-like text
-            # Prices usually appear as numbers with 'K' or 'M' or plain numbers
-            all_text_elements = soup.find_all(text=True)
-            potential_prices = []
+            if second_price_elem:
+                try:
+                    second_price_text = second_price_elem.get_text(strip=True)
+                    second_price = self.parse_price_text(second_price_text)
+                    if second_price > 0:
+                        bin_prices.append(second_price)
+                        print(f"💰 Second BIN: {second_price:,} coins")
+                except Exception as e:
+                    print(f"Error parsing second price: {e}")
             
-            import re
-            for text in all_text_elements:
-                text = str(text).strip()
-                # Look for patterns like: 150K, 1.5M, 250,000, etc.
-                price_patterns = [
-                    r'\b(\d{1,3}(?:,\d{3})*)\b',  # 150,000
-                    r'\b(\d+\.?\d*[KM])\b',       # 150K, 1.5M
-                    r'\b(\d{4,})\b'               # 1500 (4+ digits)
-                ]
+            # Also look for additional BIN prices in case there are more
+            # Sometimes there are multiple listings
+            additional_price_elements = soup.find_all(class_="lowest-price inline-with-icon")
+            for elem in additional_price_elements:
+                try:
+                    price_text = elem.get_text(strip=True)
+                    price = self.parse_price_text(price_text)
+                    if price > 0 and price not in bin_prices:
+                        bin_prices.append(price)
+                        print(f"💰 Additional BIN: {price:,} coins")
+                except Exception as e:
+                    continue
+            
+            # If we found BIN prices, assign them to platforms
+            if bin_prices:
+                # Sort prices (lowest first)
+                bin_prices = sorted(bin_prices)
+                print(f"💰 All BIN prices found: {[f'{p:,}' for p in bin_prices]}")
                 
-                for pattern in price_patterns:
-                    matches = re.findall(pattern, text, re.IGNORECASE)
-                    for match in matches:
-                        try:
-                            price = self.parse_price_text(match)
-                            if 1000 <= price <= 50000000:  # Reasonable price range
-                                potential_prices.append(price)
-                        except:
-                            continue
-            
-            # Method 3: Look for table structures that might contain prices
-            tables = soup.find_all('table')
-            for table in tables:
-                cells = table.find_all(['td', 'th'])
-                for cell in cells:
-                    cell_text = cell.get_text(strip=True)
-                    if cell_text:
-                        try:
-                            price = self.parse_price_text(cell_text)
-                            if 1000 <= price <= 50000000:
-                                potential_prices.append(price)
-                        except:
-                            continue
-            
-            # Clean and sort potential prices
-            if potential_prices:
-                # Remove duplicates and sort
-                unique_prices = sorted(list(set(potential_prices)))
-                print(f"💰 Found potential prices: {unique_prices[:10]}")  # Show first 10
+                # For now, assign to PS platform (most common)
+                # In future versions, we could detect platform-specific sections
+                prices['ps'] = bin_prices
                 
-                # For now, assign all prices to PS platform
-                # In a more sophisticated version, we'd detect platform-specific sections
-                prices['ps'] = unique_prices[:10]  # Take top 10 prices
-                
-                # If we have multiple price ranges, try to distribute across platforms
-                if len(unique_prices) >= 6:
-                    prices['ps'] = unique_prices[:5]
-                    prices['xbox'] = unique_prices[2:7]  # Some overlap is OK
-                
-            # Method 4: Look for JavaScript data or API calls
-            # Sometimes prices are loaded via JavaScript/AJAX
-            scripts = soup.find_all('script')
-            for script in scripts:
-                if script.string:
-                    script_content = script.string
-                    # Look for price data in JavaScript
-                    price_matches = re.findall(r'"price[^"]*":\s*(\d+)', script_content)
-                    for match in price_matches:
-                        try:
-                            price = int(match)
-                            if 1000 <= price <= 50000000:
-                                prices['ps'].append(price)
-                        except:
-                            continue
+                # If we have enough prices, also assign to other platforms
+                if len(bin_prices) >= 3:
+                    prices['xbox'] = bin_prices[1:]  # Offset slightly for Xbox
+                if len(bin_prices) >= 5:
+                    prices['pc'] = bin_prices[2:]    # Offset for PC
             
-            # Final cleanup - ensure all price lists are sorted and unique
-            for platform in prices:
-                if prices[platform]:
-                    prices[platform] = sorted(list(set(prices[platform])))
-                    print(f"💰 {platform.upper()}: {prices[platform][:5]}")  # Show first 5
+            else:
+                print("❌ No BIN prices found with target selectors")
+                
+                # Fallback: Look for any price-like elements in the Market section
+                # Sometimes the classes might be slightly different
+                market_section = soup.find(string="Market")
+                if market_section:
+                    market_container = market_section.find_parent()
+                    if market_container:
+                        # Look for any price elements in the market container
+                        price_elements = market_container.find_all(class_=lambda x: x and 'price' in str(x).lower())
+                        print(f"🔍 Found {len(price_elements)} price-related elements in Market section")
+                        
+                        fallback_prices = []
+                        for elem in price_elements:
+                            try:
+                                price_text = elem.get_text(strip=True)
+                                price = self.parse_price_text(price_text)
+                                if price > 1000:  # Reasonable minimum
+                                    fallback_prices.append(price)
+                            except:
+                                continue
+                        
+                        if fallback_prices:
+                            fallback_prices = sorted(list(set(fallback_prices)))
+                            prices['ps'] = fallback_prices[:5]  # Take top 5
+                            print(f"💰 Fallback prices: {[f'{p:,}' for p in fallback_prices[:5]]}")
             
-            return prices
+            # Final validation
+            total_prices = sum(len(prices[p]) for p in prices)
+            if total_prices > 0:
+                print(f"✅ Successfully extracted {total_prices} BIN prices")
+                return prices
+            else:
+                print("❌ No valid BIN prices found")
+                return None
             
         except Exception as e:
             print(f"Error scraping prices from {futbin_url}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def parse_price_text(self, price_text):
