@@ -122,6 +122,7 @@ class FutbinPriceMonitor:
             self.rotate_user_agent()
             
             url = f'https://www.futbin.com/players?page={page_num}'
+            print(f"🌐 Fetching: {url}")
             response = self.session.get(url)
             
             if response.status_code != 200:
@@ -131,74 +132,144 @@ class FutbinPriceMonitor:
             soup = BeautifulSoup(response.content, 'html.parser')
             cards = []
             
+            # Debug: Check what we actually got
+            print(f"📄 Page {page_num} - Content length: {len(response.content)} bytes")
+            
             # Find player rows (similar to GitHub repo)
+            total_rows_found = 0
             for row_class in ['player_tr_1', 'player_tr_2']:
                 player_rows = soup.find_all('tr', class_=row_class)
+                total_rows_found += len(player_rows)
+                print(f"🔍 Found {len(player_rows)} rows with class '{row_class}'")
                 
                 for row in player_rows:
                     try:
                         card_data = self.extract_card_data(row)
                         if card_data:
                             cards.append(card_data)
+                        else:
+                            print("⚠️ Card data extraction returned None for a row")
                     except Exception as e:
                         print(f"Error extracting card: {e}")
                         continue
             
+            # If no rows found with expected classes, try alternative approaches
+            if total_rows_found == 0:
+                print("🔍 No rows found with expected classes, trying alternative selectors...")
+                
+                # Try finding any table rows
+                all_rows = soup.find_all('tr')
+                print(f"📊 Found {len(all_rows)} total <tr> elements on page")
+                
+                # Try finding any links that might be player links
+                player_links = soup.find_all('a', href=lambda x: x and '/player/' in str(x))
+                print(f"🔗 Found {len(player_links)} player links on page")
+                
+                # Show first few links for debugging
+                for i, link in enumerate(player_links[:3]):
+                    print(f"🔗 Link {i+1}: {link.get('href', 'No href')} - Text: {link.get_text(strip=True)[:50]}")
+            
+            print(f"✅ Page {page_num}: Found {total_rows_found} rows, extracted {len(cards)} cards")
             return cards
             
         except Exception as e:
             print(f"Error scraping page {page_num}: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def extract_card_data(self, row):
         """Extract card information from a table row"""
         try:
-            # Get player name and URL
+            # Debug: Show what we're working with
+            print(f"🔍 Extracting from row: {str(row)[:200]}...")
+            
+            # Get player name and URL - try multiple selectors
+            name_link = None
+            
+            # Try original selector
             name_link = row.find('a', class_='player_name_players_table')
-            if not name_link:
-                # Try alternative selectors for current Futbin structure
-                name_link = row.find('a', href=lambda x: x and '/player/' in str(x))
+            if name_link:
+                print("✅ Found name link with original selector")
             
             if not name_link:
+                # Try alternative selectors
+                name_link = row.find('a', href=lambda x: x and '/player/' in str(x))
+                if name_link:
+                    print("✅ Found name link with href selector")
+            
+            if not name_link:
+                # Try any link in the row
+                name_link = row.find('a')
+                if name_link:
+                    print(f"⚠️ Found generic link: {name_link.get('href', 'No href')}")
+            
+            if not name_link:
+                print("❌ No name link found in row")
                 return None
             
             name = name_link.get_text(strip=True)
-            futbin_url = name_link['href']
+            futbin_url = name_link.get('href', '')
+            
+            print(f"📝 Extracted - Name: {name}, URL: {futbin_url}")
             
             # Ensure full URL
             if futbin_url.startswith('/'):
                 futbin_url = 'https://www.futbin.com' + futbin_url
             
+            # Skip if not a player URL
+            if '/player/' not in futbin_url:
+                print(f"⚠️ Skipping non-player URL: {futbin_url}")
+                return None
+            
             # Extract futbin ID from URL (format: /26/player/18710/henry)
             url_parts = futbin_url.split('/')
             futbin_id = url_parts[-2] if len(url_parts) > 2 else None
             
-            # Get rating
+            # Get rating - try multiple approaches
+            rating = 0
             rating_elem = row.find('span', class_='rating')
-            rating = int(rating_elem.get_text(strip=True)) if rating_elem else 0
+            if rating_elem:
+                try:
+                    rating = int(rating_elem.get_text(strip=True))
+                    print(f"✅ Found rating: {rating}")
+                except:
+                    print("⚠️ Could not parse rating")
+            else:
+                print("⚠️ No rating element found")
             
             # Get position
+            position = ''
             position_elem = row.find('td', class_='position')
-            position = position_elem.get_text(strip=True) if position_elem else ''
+            if not position_elem:
+                # Try alternative selector
+                position_elem = row.find('td', string=lambda text: text and len(str(text).strip()) <= 4)
+            if position_elem:
+                position = position_elem.get_text(strip=True)
+                print(f"✅ Found position: {position}")
             
-            # Get club
-            club_elem = row.find('a', href=lambda x: x and '/club/' in str(x))
-            club = club_elem.get_text(strip=True) if club_elem else ''
+            # Get club, nation, league with simpler approach
+            club = ''
+            nation = ''
+            league = ''
             
-            # Get nation
-            nation_elem = row.find('a', href=lambda x: x and '/nation/' in str(x))
-            nation = nation_elem.get_text(strip=True) if nation_elem else ''
-            
-            # Get league
-            league_elem = row.find('a', href=lambda x: x and '/league/' in str(x))
-            league = league_elem.get_text(strip=True) if league_elem else ''
+            # Look for any links that might be club/nation/league
+            all_links = row.find_all('a')
+            for link in all_links:
+                href = link.get('href', '')
+                if '/club/' in href:
+                    club = link.get_text(strip=True)
+                elif '/nation/' in href:
+                    nation = link.get_text(strip=True)
+                elif '/league/' in href:
+                    league = link.get_text(strip=True)
             
             # Determine card type based on rating/special indicators
             card_type = 'Gold' if rating >= 75 else 'Silver' if rating >= 65 else 'Bronze'
             if any(keyword in name.lower() for keyword in ['toty', 'tots', 'motm', 'if', 'sbc']):
                 card_type = 'Special'
             
-            return {
+            card_data = {
                 'name': name,
                 'rating': rating,
                 'position': position,
@@ -210,8 +281,13 @@ class FutbinPriceMonitor:
                 'futbin_id': futbin_id
             }
             
+            print(f"✅ Successfully extracted card: {name} ({rating})")
+            return card_data
+            
         except Exception as e:
-            print(f"Error extracting card data: {e}")
+            print(f"❌ Error extracting card data: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def save_cards_to_db(self, cards):
@@ -624,7 +700,10 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         card_count = cursor.fetchone()[0]
         conn.close()
         
-        if card_count < 100:
+        # More aggressive scraping if no persistent storage
+        min_cards_needed = 500  # Reduced from 100 for faster startup
+        
+        if card_count < min_cards_needed:
             print(f"📊 Only {card_count} cards in database. Starting scraping...")
             self.scrape_all_cards()
         else:

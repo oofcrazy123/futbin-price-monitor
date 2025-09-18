@@ -17,15 +17,32 @@ def start_monitor():
     global monitor, is_running
     try:
         print("🔄 Attempting to start monitor...")
+        
+        # Add delay to let Flask start properly
+        time.sleep(2)
+        
+        print("📦 Importing FutbinPriceMonitor...")
         from futbin_monitor import FutbinPriceMonitor
+        
+        print("🔧 Creating monitor instance...")
         monitor = FutbinPriceMonitor()
-        is_running = True
+        
         print("✅ Monitor initialized, starting complete system...")
+        is_running = True
+        
+        print("🚀 Starting scraping and monitoring...")
         monitor.run_complete_system()
+        
+    except ImportError as e:
+        print(f"❌ Import error: {e}")
+        print("📋 Available files:", os.listdir('.'))
+        is_running = False
+        
     except Exception as e:
         print(f"❌ Monitor error: {e}")
         is_running = False
         import traceback
+        print("📋 Full error traceback:")
         traceback.print_exc()
 
 @app.route('/')
