@@ -1,3 +1,4 @@
+# app.py (Web interface + background worker)
 from flask import Flask, render_template, jsonify
 import threading
 import time
@@ -15,31 +16,57 @@ is_running = False
 def start_monitor():
     """Start the price monitor in background"""
     global monitor, is_running
+    
+    print("🔄 Attempting to start monitor...")
+    print(f"📁 Current directory: {os.getcwd()}")
+    print(f"📋 Files in directory: {os.listdir('.')}")
+    
     try:
-        print("🔄 Attempting to start monitor...")
-        
         # Add delay to let Flask start properly
-        time.sleep(2)
+        print("⏳ Waiting 3 seconds for Flask to stabilize...")
+        time.sleep(3)
         
-        print("📦 Importing FutbinPriceMonitor...")
-        from futbin_monitor import FutbinPriceMonitor
+        print("📦 Attempting to import FutbinPriceMonitor...")
+        
+        # Try to import step by step
+        try:
+            import futbin_monitor
+            print("✅ Successfully imported futbin_monitor module")
+        except ImportError as e:
+            print(f"❌ Failed to import futbin_monitor: {e}")
+            return
+        
+        try:
+            from futbin_monitor import FutbinPriceMonitor
+            print("✅ Successfully imported FutbinPriceMonitor class")
+        except ImportError as e:
+            print(f"❌ Failed to import FutbinPriceMonitor class: {e}")
+            return
         
         print("🔧 Creating monitor instance...")
-        monitor = FutbinPriceMonitor()
+        try:
+            monitor = FutbinPriceMonitor()
+            print("✅ Monitor instance created successfully")
+        except Exception as e:
+            print(f"❌ Failed to create monitor instance: {e}")
+            import traceback
+            traceback.print_exc()
+            return
         
         print("✅ Monitor initialized, starting complete system...")
         is_running = True
         
         print("🚀 Starting scraping and monitoring...")
-        monitor.run_complete_system()
-        
-    except ImportError as e:
-        print(f"❌ Import error: {e}")
-        print("📋 Available files:", os.listdir('.'))
-        is_running = False
+        try:
+            monitor.run_complete_system()
+        except Exception as e:
+            print(f"❌ Error in run_complete_system: {e}")
+            import traceback
+            traceback.print_exc()
+            is_running = False
         
     except Exception as e:
-        print(f"❌ Monitor error: {e}")
+        print(f"❌ Unexpected monitor error: {e}")
         is_running = False
         import traceback
         print("📋 Full error traceback:")
@@ -187,4 +214,4 @@ if __name__ == '__main__':
     # Start Flask web interface
     port = int(os.environ.get('PORT', 5000))
     print(f"🌐 Starting web server on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=True)

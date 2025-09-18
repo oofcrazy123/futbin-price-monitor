@@ -166,8 +166,7 @@ class FutbinPriceMonitor:
     
     def scrape_futbin_cards_list(self, page_num):
         """
-        Scrape cards from a Futbin players page
-        Based on the GitHub repo logic but simplified
+        Scrape cards from a Futbin players page - Updated for current structure
         """
         try:
             self.rotate_user_agent()
@@ -183,44 +182,79 @@ class FutbinPriceMonitor:
             soup = BeautifulSoup(response.content, 'html.parser')
             cards = []
             
-            # Debug: Check what we actually got
             print(f"📄 Page {page_num} - Content length: {len(response.content)} bytes")
             
-            # Find player rows (similar to GitHub repo)
-            total_rows_found = 0
-            for row_class in ['player_tr_1', 'player_tr_2']:
-                player_rows = soup.find_all('tr', class_=row_class)
-                total_rows_found += len(player_rows)
-                print(f"🔍 Found {len(player_rows)} rows with class '{row_class}'")
+            # Look for the main players table
+            players_table = soup.find('table', class_='futbin-table players-table')
+            if not players_table:
+                players_table = soup.find('table', class_='futbin-table')
+            
+            if players_table:
+                print("✅ Found futbin-table players-table")
                 
-                for row in player_rows:
+                # Look for tbody with player rows
+                tbody = players_table.find('tbody', class_='with-border with-background')
+                if not tbody:
+                    tbody = players_table.find('tbody')
+                
+                if tbody:
+                    print("✅ Found tbody section")
+                    
+                    # Find all table rows in tbody
+                    player_rows = tbody.find_all('tr')
+                    print(f"🔍 Found {len(player_rows)} rows in tbody")
+                    
+                    for i, row in enumerate(player_rows):
+                        try:
+                            # Look for player links in this row
+                            player_links = row.find_all('a', href=lambda x: x and '/player/' in str(x))
+                            
+                            if player_links:
+                                # Extract data from the row
+                                card_data = self.extract_card_from_row(row, player_links)
+                                if card_data:
+                                    cards.append(card_data)
+                                    if i < 3:  # Show first 3 for debugging
+                                        print(f"✅ Extracted: {card_data['name']} ({card_data['rating']})")
+                        except Exception as e:
+                            print(f"Error processing row {i}: {e}")
+                            continue
+                else:
+                    print("❌ No tbody found in table")
+            else:
+                print("❌ No futbin-table found, trying alternative approach...")
+                
+                # Fallback: Look for any player links on the page
+                all_player_links = soup.find_all('a', href=lambda x: x and '/player/' in str(x))
+                print(f"🔗 Found {len(all_player_links)} total player links on page")
+                
+                # Group by player URL to avoid duplicates
+                unique_players = {}
+                for link in all_player_links:
+                    href = link.get('href', '')
+                    if href not in unique_players:
+                        unique_players[href] = {
+                            'url': href,
+                            'texts': [link.get_text(strip=True)]
+                        }
+                    else:
+                        unique_players[href]['texts'].append(link.get_text(strip=True))
+                
+                # Convert to card format
+                for url, data in unique_players.items():
                     try:
-                        card_data = self.extract_card_data(row)
+                        card_data = self.extract_card_from_link_data(url, data['texts'])
                         if card_data:
                             cards.append(card_data)
-                        else:
-                            print("⚠️ Card data extraction returned None for a row")
                     except Exception as e:
-                        print(f"Error extracting card: {e}")
                         continue
             
-            # If no rows found with expected classes, try alternative approaches
-            if total_rows_found == 0:
-                print("🔍 No rows found with expected classes, trying alternative selectors...")
-                
-                # Try finding any table rows
-                all_rows = soup.find_all('tr')
-                print(f"📊 Found {len(all_rows)} total <tr> elements on page")
-                
-                # Try finding any links that might be player links
-                player_links = soup.find_all('a', href=lambda x: x and '/player/' in str(x))
-                print(f"🔗 Found {len(player_links)} player links on page")
-                
-                # Show first few links for debugging
-                for i, link in enumerate(player_links[:3]):
-                    print(f"🔗 Link {i+1}: {link.get('href', 'No href')} - Text: {link.get_text(strip=True)[:50]}")
+            print(f"✅ Page {page_num}: Extracted {len(cards)} cards total")
             
-            print(f"✅ Page {page_num}: Found {total_rows_found} rows, extracted {len(cards)} cards")
+            # Show sample of extracted cards
+            for i, card in enumerate(cards[:3]):
+                print(f"🃏 Card {i+1}: {card['name']} ({card['rating']}) - {card['futbin_id']}")
+            
             return cards
             
         except Exception as e:
@@ -228,6 +262,105 @@ class FutbinPriceMonitor:
             import traceback
             traceback.print_exc()
             return []
+    
+    def extract_card_from_row(self, row, player_links):
+        """Extract card data from a table row"""
+        try:
+            # Get the main player link (usually the first one)
+            main_link = player_links[0]
+            href = main_link.get('href', '')
+            
+            # Extract player name from link text or nearby elements
+            name = main_link.get_text(strip=True)
+            if not name or len(name) < 2:
+                # Try to find name in other cells
+                name_cells = row.find_all('td')
+                for cell in name_cells:
+                    cell_text = cell.get_text(strip=True)
+                    if cell_text and len(cell_text) > 2 and any(c.isalpha() for c in cell_text):
+                        if not cell_text.isdigit():
+                            name = cell_text
+                            break
+            
+            # Extract rating - look for number between 40-99
+            rating = 0
+            all_text = row.get_text()
+            import re
+            rating_matches = re.findall(r'\b([4-9][0-9])\b', all_text)
+            if rating_matches:
+                rating = int(rating_matches[0])
+            
+            # Extract futbin ID from URL
+            futbin_id = None
+            if '/player/' in href:
+                url_parts = href.split('/')
+                if len(url_parts) >= 4:
+                    futbin_id = url_parts[3]
+            
+            if name and rating > 0 and futbin_id:
+                futbin_url = 'https://www.futbin.com' + href if href.startswith('/') else href
+                
+                return {
+                    'name': name,
+                    'rating': rating,
+                    'position': '',
+                    'club': '',
+                    'nation': '',
+                    'league': '',
+                    'card_type': 'Gold' if rating >= 75 else 'Silver' if rating >= 65 else 'Bronze',
+                    'futbin_url': futbin_url,
+                    'futbin_id': futbin_id
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error extracting from row: {e}")
+            return None
+    
+    def extract_card_from_link_data(self, url, texts):
+        """Extract card data from link URL and associated texts"""
+        try:
+            # Find the best name from texts
+            name = ""
+            rating = 0
+            
+            for text in texts:
+                text = text.strip()
+                if text:
+                    # If it's a number and looks like a rating
+                    if text.isdigit() and 40 <= int(text) <= 99:
+                        rating = int(text)
+                    # If it's text and longer than current name
+                    elif len(text) > len(name) and any(c.isalpha() for c in text):
+                        name = text
+            
+            # Extract futbin ID from URL
+            futbin_id = None
+            if '/player/' in url:
+                url_parts = url.split('/')
+                if len(url_parts) >= 4:
+                    futbin_id = url_parts[3]
+            
+            if name and rating > 0 and futbin_id:
+                futbin_url = 'https://www.futbin.com' + url if url.startswith('/') else url
+                
+                return {
+                    'name': name,
+                    'rating': rating,
+                    'position': '',
+                    'club': '',
+                    'nation': '',
+                    'league': '',
+                    'card_type': 'Gold' if rating >= 75 else 'Silver' if rating >= 65 else 'Bronze',
+                    'futbin_url': futbin_url,
+                    'futbin_id': futbin_id
+                }
+            
+            return None
+            
+        except Exception as e:
+            return None
     
     def extract_card_data(self, row):
         """Extract card information from a table row"""
@@ -410,7 +543,10 @@ class FutbinPriceMonitor:
         return total_saved
     
     def scrape_card_prices(self, futbin_url):
-        """Scrape current prices from a card's Futbin page"""
+        """
+        Scrape current BIN prices from a card's individual Futbin page
+        This is where we get the actual first/second lowest BIN prices
+        """
         try:
             self.rotate_user_agent()
             response = self.session.get(futbin_url)
@@ -421,93 +557,106 @@ class FutbinPriceMonitor:
             soup = BeautifulSoup(response.content, 'html.parser')
             prices = {'ps': [], 'xbox': [], 'pc': []}
             
-            # Look for the price container sections with updated selectors
+            print(f"💰 Extracting prices from: {futbin_url}")
             
-            # Try multiple methods to find price data
-            prices_found = False
+            # Method 1: Look for price tables or containers
+            # The prices are usually in a specific section of the individual player page
             
-            # Method 1: Look for table cells with coin images (current structure)
-            price_cells = soup.find_all('td', string=lambda text: text and ('K' in str(text) or 'M' in str(text)))
-            if price_cells:
-                all_prices = []
-                for cell in price_cells:
-                    try:
-                        price_text = cell.get_text(strip=True)
-                        if price_text and price_text != '0':
-                            price = self.parse_price_text(price_text)
-                            if price > 0:
-                                all_prices.append(price)
-                    except:
-                        continue
-                
-                # Assign prices to platforms (first few go to PS, others to Xbox/PC)
-                if all_prices:
-                    all_prices = sorted(list(set(all_prices)))
-                    prices['ps'] = all_prices[:min(5, len(all_prices))]
-                    if len(all_prices) > 5:
-                        prices['xbox'] = all_prices[5:min(10, len(all_prices))]
-                    prices_found = True
+            # Try to find price containers by common class patterns
+            price_containers = []
             
-            # Method 2: Console-specific sections (fallback)
-            if not prices_found:
-                console_sections = {
-                    'ps': soup.find('div', {'id': 'ps-prices'}) or soup.find('[data-console="ps"]'),
-                    'xbox': soup.find('div', {'id': 'xbox-prices'}) or soup.find('[data-console="xbox"]'), 
-                    'pc': soup.find('div', {'id': 'pc-prices'}) or soup.find('[data-console="pc"]')
-                }
-                
-                for platform, section in console_sections.items():
-                    if section:
-                        price_selectors = [
-                            '.bin-price', '.price-value', '.lowest-price', 
-                            '[data-price]', '.market-price', '.current-price'
-                        ]
-                        
-                        platform_prices = []
-                        for selector in price_selectors:
-                            price_elements = section.select(selector)
-                            for elem in price_elements:
-                                try:
-                                    price_text = elem.get_text(strip=True)
-                                    if price_text and price_text != '0' and price_text != '-':
-                                        price = self.parse_price_text(price_text)
-                                        if price > 0:
-                                            platform_prices.append(price)
-                                except:
-                                    continue
-                            
-                            # Also try data attributes
-                            if hasattr(elem, 'get') and elem.get('data-price'):
-                                try:
-                                    price = int(elem.get('data-price'))
-                                    if price > 0:
-                                        platform_prices.append(price)
-                                except:
-                                    continue
-                        
-                        # Remove duplicates and sort
-                        prices[platform] = sorted(list(set(platform_prices)))
+            # Look for common price-related selectors
+            possible_selectors = [
+                '.price-container',
+                '.bin-prices',
+                '.market-prices', 
+                '.player-prices',
+                '[class*="price"]',
+                '.lowest-bin',
+                '.current-price'
+            ]
             
-            # Method 3: If no console-specific sections found, try general approach
-            if all(len(prices[p]) == 0 for p in prices):
-                # Look for any price elements on the page
-                all_price_elements = soup.select('.price, [class*="price"], [data-price]')
-                general_prices = []
+            for selector in possible_selectors:
+                elements = soup.select(selector)
+                if elements:
+                    print(f"🔍 Found {len(elements)} elements with selector: {selector}")
+                    price_containers.extend(elements)
+            
+            # Method 2: Look for any elements containing price-like text
+            # Prices usually appear as numbers with 'K' or 'M' or plain numbers
+            all_text_elements = soup.find_all(text=True)
+            potential_prices = []
+            
+            import re
+            for text in all_text_elements:
+                text = str(text).strip()
+                # Look for patterns like: 150K, 1.5M, 250,000, etc.
+                price_patterns = [
+                    r'\b(\d{1,3}(?:,\d{3})*)\b',  # 150,000
+                    r'\b(\d+\.?\d*[KM])\b',       # 150K, 1.5M
+                    r'\b(\d{4,})\b'               # 1500 (4+ digits)
+                ]
                 
-                for elem in all_price_elements:
-                    try:
-                        price_text = elem.get_text(strip=True)
-                        if price_text:
-                            price = self.parse_price_text(price_text)
-                            if price > 0:
-                                general_prices.append(price)
-                    except:
-                        continue
+                for pattern in price_patterns:
+                    matches = re.findall(pattern, text, re.IGNORECASE)
+                    for match in matches:
+                        try:
+                            price = self.parse_price_text(match)
+                            if 1000 <= price <= 50000000:  # Reasonable price range
+                                potential_prices.append(price)
+                        except:
+                            continue
+            
+            # Method 3: Look for table structures that might contain prices
+            tables = soup.find_all('table')
+            for table in tables:
+                cells = table.find_all(['td', 'th'])
+                for cell in cells:
+                    cell_text = cell.get_text(strip=True)
+                    if cell_text:
+                        try:
+                            price = self.parse_price_text(cell_text)
+                            if 1000 <= price <= 50000000:
+                                potential_prices.append(price)
+                        except:
+                            continue
+            
+            # Clean and sort potential prices
+            if potential_prices:
+                # Remove duplicates and sort
+                unique_prices = sorted(list(set(potential_prices)))
+                print(f"💰 Found potential prices: {unique_prices[:10]}")  # Show first 10
                 
-                # If we found prices but couldn't categorize by platform,
-                # assume they're for the default platform (PS)
-                if general_prices:
-                    prices['ps'] = sorted(list(set(general_prices)))
+                # For now, assign all prices to PS platform
+                # In a more sophisticated version, we'd detect platform-specific sections
+                prices['ps'] = unique_prices[:10]  # Take top 10 prices
+                
+                # If we have multiple price ranges, try to distribute across platforms
+                if len(unique_prices) >= 6:
+                    prices['ps'] = unique_prices[:5]
+                    prices['xbox'] = unique_prices[2:7]  # Some overlap is OK
+                
+            # Method 4: Look for JavaScript data or API calls
+            # Sometimes prices are loaded via JavaScript/AJAX
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string:
+                    script_content = script.string
+                    # Look for price data in JavaScript
+                    price_matches = re.findall(r'"price[^"]*":\s*(\d+)', script_content)
+                    for match in price_matches:
+                        try:
+                            price = int(match)
+                            if 1000 <= price <= 50000000:
+                                prices['ps'].append(price)
+                        except:
+                            continue
+            
+            # Final cleanup - ensure all price lists are sorted and unique
+            for platform in prices:
+                if prices[platform]:
+                    prices[platform] = sorted(list(set(prices[platform])))
+                    print(f"💰 {platform.upper()}: {prices[platform][:5]}")  # Show first 5
             
             return prices
             
