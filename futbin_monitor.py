@@ -15,6 +15,15 @@ try:
     print("✅ Loaded .env file for local development")
 except ImportError:
     print("📦 python-dotenv not installed, using system environment variables only")
+except Exception as e:
+    print(f"⚠️ Error loading .env file: {e}")
+
+# Test environment variables immediately
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+print(f"🔑 Bot token available: {'Yes' if TELEGRAM_BOT_TOKEN else 'No'}")
+print(f"💬 Chat ID available: {'Yes' if TELEGRAM_CHAT_ID else 'No'}")
 
 class Config:
     """Configuration class that handles both local .env and production environment variables"""
@@ -54,7 +63,32 @@ class FutbinPriceMonitor:
         # Validate configuration on startup
         Config.validate_config()
         
+        # For cloud deployment, try to use a persistent path
+        if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
+            # We're on Render - try to use a persistent location
+            db_path = "/opt/render/project/src/futbin_cards.db"
+            print(f"🌐 Running on Render, using database path: {db_path}")
+        else:
+            print(f"🏠 Running locally, using database path: {db_path}")
+        
         self.db_path = db_path
+        
+        # Test database write permissions
+        try:
+            test_conn = sqlite3.connect(self.db_path)
+            test_conn.execute("CREATE TABLE IF NOT EXISTS test_table (id INTEGER)")
+            test_conn.execute("INSERT INTO test_table (id) VALUES (1)")
+            test_conn.execute("DROP TABLE test_table")
+            test_conn.commit()
+            test_conn.close()
+            print("✅ Database write test successful")
+        except Exception as e:
+            print(f"⚠️ Database write test failed: {e}")
+            print("📁 Trying alternative database location...")
+            # Fallback to /tmp (temporary but works)
+            self.db_path = "/tmp/futbin_cards.db"
+            print(f"🔄 Using fallback database path: {self.db_path}")
+        
         self.session = requests.Session()
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -73,45 +107,62 @@ class FutbinPriceMonitor:
     
     def init_database(self):
         """Initialize SQLite database (YOUR own database!)"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        print(f"🔧 Initializing database at: {self.db_path}")
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS cards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                rating INTEGER,
-                position TEXT,
-                club TEXT,
-                nation TEXT,
-                league TEXT,
-                card_type TEXT,
-                futbin_url TEXT UNIQUE,
-                futbin_id TEXT,
-                last_price_check TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS price_alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                card_id INTEGER,
-                platform TEXT,
-                buy_price INTEGER,
-                sell_price INTEGER,
-                sell_price_after_tax INTEGER,
-                profit_after_tax INTEGER,
-                percentage_profit REAL,
-                ea_tax INTEGER,
-                alert_sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (card_id) REFERENCES cards (id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        print("✅ Database initialized!")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            print("📋 Creating cards table...")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    rating INTEGER,
+                    position TEXT,
+                    club TEXT,
+                    nation TEXT,
+                    league TEXT,
+                    card_type TEXT,
+                    futbin_url TEXT UNIQUE,
+                    futbin_id TEXT,
+                    last_price_check TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            print("📋 Creating price_alerts table...")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS price_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    card_id INTEGER,
+                    platform TEXT,
+                    buy_price INTEGER,
+                    sell_price INTEGER,
+                    sell_price_after_tax INTEGER,
+                    profit_after_tax INTEGER,
+                    percentage_profit REAL,
+                    ea_tax INTEGER,
+                    alert_sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (card_id) REFERENCES cards (id)
+                )
+            ''')
+            
+            conn.commit()
+            
+            # Test if we can actually read/write
+            cursor.execute('SELECT COUNT(*) FROM cards')
+            existing_cards = cursor.fetchone()[0]
+            print(f"📊 Database initialized! Existing cards: {existing_cards}")
+            
+            conn.close()
+            print("✅ Database initialization successful!")
+            
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def scrape_futbin_cards_list(self, page_num):
         """
@@ -334,14 +385,14 @@ class FutbinPriceMonitor:
                 else:
                     print(f"⚠️ Page {page}: No cards found")
                 
-                # Progress notification every 25 pages
+                # Progress notification every 25 pages (back to original)
                 if page % 25 == 0:
                     self.send_telegram_notification(
                         f"📊 Scraping Progress: {page}/{Config.PAGES_TO_SCRAPE} pages complete\n"
                         f"💾 Total cards saved: {total_saved}"
                     )
                 
-                # Random delay between pages (3-6 seconds)
+                # Random delay between pages (3-6 seconds - original timing)
                 time.sleep(random.uniform(3, 6))
                 
             except Exception as e:
@@ -645,18 +696,23 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         return cards
     
     def run_price_monitoring(self):
-        """Main monitoring loop"""
-        print("🤖 Starting price monitoring...")
+        """Main monitoring loop - respecting Cloudflare delays"""
+        print("🤖 Starting price monitoring with proper anti-detection delays...")
         
         while True:
             try:
-                cards = self.get_cards_to_monitor(100)  # Monitor 100 cards per cycle
+                cards = self.get_cards_to_monitor(100)  # Back to 100 cards per cycle
                 if not cards:
-                    print("❌ No cards in database! Run scraping first.")
-                    return
+                    print("❌ No cards in database! This shouldn't happen after scraping.")
+                    # If database is empty, do a quick re-scrape
+                    print("🔄 Re-scraping essential cards...")
+                    self.scrape_all_cards()
+                    continue
                 
                 print(f"📊 Monitoring {len(cards)} cards for price gaps...")
+                print("⏱️ Using proper delays to avoid Cloudflare detection...")
                 
+                alerts_sent = 0
                 for i, card in enumerate(cards):
                     try:
                         prices = self.scrape_card_prices(card['futbin_url'])
@@ -667,49 +723,73 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
                                     gap_info = self.analyze_price_gap(price_list)
                                     if gap_info:
                                         self.send_price_alert(card, platform, gap_info)
+                                        alerts_sent += 1
                         
-                        # Progress update
+                        # Progress update every 25 cards (original frequency)
                         if (i + 1) % 25 == 0:
-                            print(f"✅ Checked {i + 1}/{len(cards)} cards...")
+                            print(f"✅ Checked {i + 1}/{len(cards)} cards... Alerts sent: {alerts_sent}")
                         
-                        # Delay between requests
+                        # IMPORTANT: Original delay range (4-8 seconds) for price monitoring
                         time.sleep(random.uniform(4, 8))
                         
                     except Exception as e:
                         print(f"Error monitoring {card['name']}: {e}")
                         continue
                 
-                print("💤 Cycle complete. Waiting 45 minutes for next check...")
-                time.sleep(2700)  # 45 minutes
+                # Send cycle completion notification
+                if alerts_sent > 0:
+                    self.send_telegram_notification(
+                        f"📊 Monitoring cycle complete!\n"
+                        f"🔍 Checked {len(cards)} cards\n"
+                        f"🚨 Sent {alerts_sent} trading alerts\n"
+                        f"⏰ Next check in 45 minutes"
+                    )
+                else:
+                    print(f"📊 Cycle complete - no trading opportunities found this round")
+                
+                print(f"💤 Cycle complete. Sent {alerts_sent} alerts. Waiting 45 minutes for next check...")
+                time.sleep(2700)  # Back to 45 minutes (original timing)
                 
             except KeyboardInterrupt:
                 print("🛑 Monitoring stopped!")
                 break
             except Exception as e:
                 print(f"Monitoring error: {e}")
-                time.sleep(300)
+                time.sleep(300)  # 5 minutes on error
     
     def run_complete_system(self):
         """Run the complete system: scrape cards, then monitor prices"""
         print("🚀 Starting complete Futbin Price Gap Monitor system!")
+        print("⚠️ Running on free tier - database will reset on restart")
         
-        # First, check if we have cards in database
+        # Check current database state
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('SELECT COUNT(*) FROM cards')
         card_count = cursor.fetchone()[0]
         conn.close()
         
-        # More aggressive scraping if no persistent storage
-        min_cards_needed = 500  # Reduced from 100 for faster startup
+        print(f"📊 Current cards in database: {card_count}")
         
-        if card_count < min_cards_needed:
-            print(f"📊 Only {card_count} cards in database. Starting scraping...")
+        # On free tier, we'll always start fresh, so reduce scraping pages for faster startup
+        if card_count == 0:
+            print("🚀 Database is empty - starting fresh scraping session")
+            print(f"📄 Will scrape {Config.PAGES_TO_SCRAPE} pages for quick startup")
+            
+            # Send startup notification
+            self.send_telegram_notification(
+                f"🤖 Futbin Bot Started!\n"
+                f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
+                f"⚡ Free tier - optimized for quick startup!\n"
+                f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%"
+            )
+            
             self.scrape_all_cards()
         else:
             print(f"✅ Found {card_count} cards in database. Starting monitoring...")
         
-        # Start price monitoring
+        # Start price monitoring immediately after scraping
+        print("🎯 Starting price monitoring for trading opportunities...")
         self.run_price_monitoring()
 
 if __name__ == "__main__":
