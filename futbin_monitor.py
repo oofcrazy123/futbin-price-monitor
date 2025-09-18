@@ -518,15 +518,16 @@ class FutbinPriceMonitor:
                 else:
                     print(f"⚠️ Page {page}: No cards found")
                 
-                # Progress notification every 25 pages (back to original)
-                if page % 25 == 0:
+                # Progress notification every N pages (configurable)
+                if page % Config.PROGRESS_NOTIFICATION_INTERVAL == 0:
                     self.send_telegram_notification(
                         f"📊 Scraping Progress: {page}/{Config.PAGES_TO_SCRAPE} pages complete\n"
                         f"💾 Total cards saved: {total_saved}"
                     )
                 
-                # Random delay between pages (3-6 seconds - original timing)
-                time.sleep(random.uniform(3, 6))
+                # Random delay between pages (configurable)
+                delay_min, delay_max = Config.get_scraping_delay_range()
+                time.sleep(random.uniform(delay_min, delay_max))
                 
             except Exception as e:
                 print(f"❌ Error on page {page}: {e}")
@@ -745,6 +746,11 @@ class FutbinPriceMonitor:
     def send_price_alert(self, card_info, platform, gap_info):
         """Send price gap alert with proper trading calculations"""
         
+        # First, check if we should send this alert (prevent duplicates)
+        alert_saved = self.save_price_alert(card_info['id'], platform, gap_info)
+        if not alert_saved:
+            return  # Skip if duplicate
+        
         # Calculate profit margins for better context
         profit_margin = (gap_info['profit_after_tax'] / gap_info['buy_price']) * 100
         
@@ -759,7 +765,8 @@ class FutbinPriceMonitor:
             profit_emoji = "💡"
             profit_quality = "DECENT"
         
-        message = f"""
+        # Telegram message
+        telegram_message = f"""
 🚨 {profit_emoji} TRADING OPPORTUNITY - {profit_quality} 🚨
 
 🃏 **{card_info['name']}**
@@ -786,17 +793,100 @@ class FutbinPriceMonitor:
 Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {gap_info['profit_after_tax']:,}
         """
         
-        self.send_telegram_notification(message.strip())
+        # Send to Telegram
+        self.send_telegram_notification(telegram_message.strip())
         
-        # Save alert to database
-        self.save_price_alert(card_info['id'], platform, gap_info)
+        # Send to Discord if enabled
+        self.send_discord_notification(card_info, platform, gap_info, profit_margin, profit_quality)
+        
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
+        
+    def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
+        """Send Discord webhook notification"""
+        discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+        if not discord_webhook_url:
+            return  # Discord not configured
+        
+        # Determine profit quality emoji
+        if profit_margin >= 20:
+            profit_emoji = "🤑"
+        elif profit_margin >= 10:
+            profit_emoji = "💰"
+        else:
+            profit_emoji = "💡"
+        
+        # Discord embed format
+        embed = {
+            "title": f"{profit_emoji} TRADING OPPORTUNITY - {profit_quality}",
+            "description": f"**{card_info['name']}**",
+            "color": 0x00ff00 if profit_margin >= 20 else 0xffaa00 if profit_margin >= 10 else 0x0099ff,
+            "fields": [
+                {
+                    "name": "💰 Buy Price",
+                    "value": f"{gap_info['buy_price']:,} coins",
+                    "inline": True
+                },
+                {
+                    "name": "🏷️ Sell Price", 
+                    "value": f"{gap_info['sell_price']:,} coins",
+                    "inline": True
+                },
+                {
+                    "name": "🎯 Profit",
+                    "value": f"{gap_info['profit_after_tax']:,} coins ({profit_margin:.1f}%)",
+                    "inline": True
+                },
+                {
+                    "name": "📊 Details",
+                    "value": f"⭐ {card_info['rating']} | 🏆 {card_info['position']} | 📱 {platform.upper()}",
+                    "inline": False
+                },
+                {
+                    "name": "📈 Strategy",
+                    "value": f"1️⃣ Buy at {gap_info['buy_price']:,}\n2️⃣ Sell at {gap_info['sell_price']:,}\n3️⃣ Profit {gap_info['profit_after_tax']:,} after tax",
+                    "inline": False
+                }
+            ],
+            "url": card_info['futbin_url'],
+            "timestamp": datetime.now().isoformat(),
+            "footer": {
+                "text": f"EA Tax: {gap_info['ea_tax']:,} coins"
+            }
+        }
+        
+        payload = {
+            "embeds": [embed]
+        }
+        
+        try:
+            response = requests.post(discord_webhook_url, json=payload)
+            if response.status_code == 204:
+                print("✅ Discord notification sent")
+            else:
+                print(f"❌ Discord error: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Discord error: {e}")
     
     def save_price_alert(self, card_id, platform, gap_info):
-        """Save price alert to database with updated schema"""
+        """Save price alert to database and prevent duplicates"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
+        # Check if we already sent an alert for this card/platform recently
+        cooldown_time = datetime.now() - Config.get_alert_cooldown_timedelta()
+        cursor.execute('''
+            SELECT COUNT(*) FROM price_alerts 
+            WHERE card_id = ? AND platform = ? AND alert_sent_at > ?
+        ''', (card_id, platform, cooldown_time))
+        
+        recent_alerts = cursor.fetchone()[0]
+        
+        if recent_alerts > 0:
+            print(f"⚠️ Alert already sent for card {card_id} ({platform}) in the last {Config.ALERT_COOLDOWN_MINUTES} minutes, skipping...")
+            conn.close()
+            return False
+        
+        # Save new alert
         cursor.execute('''
             INSERT INTO price_alerts 
             (card_id, platform, buy_price, sell_price, sell_price_after_tax, profit_after_tax, percentage_profit, ea_tax)
@@ -809,6 +899,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         
         conn.commit()
         conn.close()
+        return True
     
     def get_cards_to_monitor(self, limit=200):
         """Get cards from database to monitor for price gaps"""
