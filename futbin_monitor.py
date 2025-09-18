@@ -1,53 +1,4 @@
-def check_and_send_startup_notification(self):
-        """Send startup notification only once per deployment"""
-        if self.startup_sent:
-            return
-        
-        # Create unique instance ID based on timestamp and process
-        instance_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
-        
-        # Check if startup notification was sent recently (last 5 minutes)
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        five_minutes_ago = datetime.now() - timedelta(minutes=5)
-        cursor.execute('''
-            SELECT COUNT(*) FROM startup_locks 
-            WHERE startup_time > ?
-        ''', (five_minutes_ago,))
-        
-        recent_startups = cursor.fetchone()[0]
-        
-        if recent_startups == 0:
-            # No recent startup, safe to send notification
-            try:
-                cursor.execute('''
-                    INSERT OR REPLACE INTO startup_locks (instance_id, startup_time)
-                    VALUES (?, ?)
-                ''', (instance_id, datetime.now()))
-                
-                conn.commit()
-                
-                # Send startup notification
-                self.send_notification_to_all(
-                    f"🤖 Futbin Bot Started!\n"
-                    f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
-                    f"⚡ Running on cloud infrastructure\n"
-                    f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%\n"
-                    f"⏰ Alert cooldown: {Config.ALERT_COOLDOWN_MINUTES} minutes",
-                    "🚀 Bot Started"
-                )
-                
-                self.startup_sent = True
-                print("✅ Startup notification sent")
-                
-            except Exception as e:
-                print(f"Error sending startup notification: {e}")
-        else:
-            print(f"⚠️ Startup notification already sent recently, skipping...")
-            self.startup_sent = True
-        
-        conn.close()import requests
+import requests
 import time
 import json
 import sqlite3
@@ -56,56 +7,15 @@ import random
 from bs4 import BeautifulSoup
 import os
 import threading
-
-# Try to load from .env file (for local development)
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    print("✅ Loaded .env file for local development")
-except ImportError:
-    print("📦 python-dotenv not installed, using system environment variables only")
-except Exception as e:
-    print(f"⚠️ Error loading .env file: {e}")
+from config import Config
 
 # Test environment variables immediately
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-
-print(f"🔑 Bot token available: {'Yes' if TELEGRAM_BOT_TOKEN else 'No'}")
-print(f"💬 Chat ID available: {'Yes' if TELEGRAM_CHAT_ID else 'No'}")
-
-class Config:
-    """Configuration class that handles both local .env and production environment variables"""
-    
-    # Telegram Configuration
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-    
-    # Price Gap Alert Configuration
-    MINIMUM_PRICE_GAP_COINS = int(os.getenv('MINIMUM_PRICE_GAP_COINS', '1000'))
-    MINIMUM_PRICE_GAP_PERCENTAGE = float(os.getenv('MINIMUM_PRICE_GAP_PERCENTAGE', '5'))
-    MINIMUM_CARD_PRICE = int(os.getenv('MINIMUM_CARD_PRICE', '5000'))
-    
-    # Scraping Configuration  
-    PAGES_TO_SCRAPE = int(os.getenv('PAGES_TO_SCRAPE', '100'))
-    MAX_PAGES = int(os.getenv('MAX_PAGES', '786'))
-    CARDS_PER_PAGE = int(os.getenv('CARDS_PER_PAGE', '30'))
-    
-    @classmethod
-    def validate_config(cls):
-        """Validate that required configuration is present"""
-        if not cls.TELEGRAM_BOT_TOKEN:
-            raise ValueError("❌ TELEGRAM_BOT_TOKEN environment variable is required")
-        
-        if not cls.TELEGRAM_CHAT_ID:
-            raise ValueError("❌ TELEGRAM_CHAT_ID environment variable is required")
-        
-        print("✅ Configuration loaded successfully!")
-        print(f"📊 Alert thresholds: {cls.MINIMUM_PRICE_GAP_COINS:,} coins, {cls.MINIMUM_PRICE_GAP_PERCENTAGE}%")
-        print(f"💰 Minimum card value: {cls.MINIMUM_CARD_PRICE:,} coins")
-        print(f"📄 Scraping plan: {cls.PAGES_TO_SCRAPE} pages ({cls.PAGES_TO_SCRAPE * cls.CARDS_PER_PAGE:,} cards)")
-        
-        return True
+print(f"🔑 Bot token available: {'Yes' if Config.TELEGRAM_BOT_TOKEN else 'No'}")
+print(f"💬 Chat ID available: {'Yes' if Config.TELEGRAM_CHAT_ID else 'No'}")
+if Config.DISCORD_WEBHOOK_URL:
+    print(f"📢 Discord webhook available: Yes")
+else:
+    print(f"📢 Discord webhook available: No")
 
 class FutbinPriceMonitor:
     def __init__(self, db_path="futbin_cards.db"):
@@ -198,6 +108,14 @@ class FutbinPriceMonitor:
                 )
             ''')
             
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS startup_locks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    startup_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    instance_id TEXT UNIQUE
+                )
+            ''')
+            
             conn.commit()
             
             # Test if we can actually read/write
@@ -213,6 +131,57 @@ class FutbinPriceMonitor:
             import traceback
             traceback.print_exc()
             raise
+
+    def check_and_send_startup_notification(self):
+        """Send startup notification only once per deployment"""
+        if self.startup_sent:
+            return
+        
+        # Create unique instance ID based on timestamp and process
+        instance_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+        
+        # Check if startup notification was sent recently (last 5 minutes)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        five_minutes_ago = datetime.now() - timedelta(minutes=5)
+        cursor.execute('''
+            SELECT COUNT(*) FROM startup_locks 
+            WHERE startup_time > ?
+        ''', (five_minutes_ago,))
+        
+        recent_startups = cursor.fetchone()[0]
+        
+        if recent_startups == 0:
+            # No recent startup, safe to send notification
+            try:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO startup_locks (instance_id, startup_time)
+                    VALUES (?, ?)
+                ''', (instance_id, datetime.now()))
+                
+                conn.commit()
+                
+                # Send startup notification
+                self.send_notification_to_all(
+                    f"🤖 Futbin Bot Started!\n"
+                    f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
+                    f"⚡ Running on cloud infrastructure\n"
+                    f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%\n"
+                    f"⏰ Alert cooldown: {Config.ALERT_COOLDOWN_MINUTES} minutes",
+                    "🚀 Bot Started"
+                )
+                
+                self.startup_sent = True
+                print("✅ Startup notification sent")
+                
+            except Exception as e:
+                print(f"Error sending startup notification: {e}")
+        else:
+            print(f"⚠️ Startup notification already sent recently, skipping...")
+            self.startup_sent = True
+        
+        conn.close()
     
     def scrape_futbin_cards_list(self, page_num):
         """
@@ -412,118 +381,6 @@ class FutbinPriceMonitor:
         except Exception as e:
             return None
     
-    def extract_card_data(self, row):
-        """Extract card information from a table row"""
-        try:
-            # Debug: Show what we're working with
-            print(f"🔍 Extracting from row: {str(row)[:200]}...")
-            
-            # Get player name and URL - try multiple selectors
-            name_link = None
-            
-            # Try original selector
-            name_link = row.find('a', class_='player_name_players_table')
-            if name_link:
-                print("✅ Found name link with original selector")
-            
-            if not name_link:
-                # Try alternative selectors
-                name_link = row.find('a', href=lambda x: x and '/player/' in str(x))
-                if name_link:
-                    print("✅ Found name link with href selector")
-            
-            if not name_link:
-                # Try any link in the row
-                name_link = row.find('a')
-                if name_link:
-                    print(f"⚠️ Found generic link: {name_link.get('href', 'No href')}")
-            
-            if not name_link:
-                print("❌ No name link found in row")
-                return None
-            
-            name = name_link.get_text(strip=True)
-            futbin_url = name_link.get('href', '')
-            
-            print(f"📝 Extracted - Name: {name}, URL: {futbin_url}")
-            
-            # Ensure full URL
-            if futbin_url.startswith('/'):
-                futbin_url = 'https://www.futbin.com' + futbin_url
-            
-            # Skip if not a player URL
-            if '/player/' not in futbin_url:
-                print(f"⚠️ Skipping non-player URL: {futbin_url}")
-                return None
-            
-            # Extract futbin ID from URL (format: /26/player/18710/henry)
-            url_parts = futbin_url.split('/')
-            futbin_id = url_parts[-2] if len(url_parts) > 2 else None
-            
-            # Get rating - try multiple approaches
-            rating = 0
-            rating_elem = row.find('span', class_='rating')
-            if rating_elem:
-                try:
-                    rating = int(rating_elem.get_text(strip=True))
-                    print(f"✅ Found rating: {rating}")
-                except:
-                    print("⚠️ Could not parse rating")
-            else:
-                print("⚠️ No rating element found")
-            
-            # Get position
-            position = ''
-            position_elem = row.find('td', class_='position')
-            if not position_elem:
-                # Try alternative selector
-                position_elem = row.find('td', string=lambda text: text and len(str(text).strip()) <= 4)
-            if position_elem:
-                position = position_elem.get_text(strip=True)
-                print(f"✅ Found position: {position}")
-            
-            # Get club, nation, league with simpler approach
-            club = ''
-            nation = ''
-            league = ''
-            
-            # Look for any links that might be club/nation/league
-            all_links = row.find_all('a')
-            for link in all_links:
-                href = link.get('href', '')
-                if '/club/' in href:
-                    club = link.get_text(strip=True)
-                elif '/nation/' in href:
-                    nation = link.get_text(strip=True)
-                elif '/league/' in href:
-                    league = link.get_text(strip=True)
-            
-            # Determine card type based on rating/special indicators
-            card_type = 'Gold' if rating >= 75 else 'Silver' if rating >= 65 else 'Bronze'
-            if any(keyword in name.lower() for keyword in ['toty', 'tots', 'motm', 'if', 'sbc']):
-                card_type = 'Special'
-            
-            card_data = {
-                'name': name,
-                'rating': rating,
-                'position': position,
-                'club': club,
-                'nation': nation,
-                'league': league,
-                'card_type': card_type,
-                'futbin_url': futbin_url,
-                'futbin_id': futbin_id
-            }
-            
-            print(f"✅ Successfully extracted card: {name} ({rating})")
-            return card_data
-            
-        except Exception as e:
-            print(f"❌ Error extracting card data: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    
     def save_cards_to_db(self, cards):
         """Save scraped cards to database"""
         conn = sqlite3.connect(self.db_path)
@@ -598,7 +455,7 @@ class FutbinPriceMonitor:
     def scrape_card_prices(self, futbin_url):
         """
         Scrape current BIN prices from a card's individual Futbin page
-        Target the exact price elements from the Market tab
+        Target ONLY the first and second lowest BIN prices
         """
         try:
             self.rotate_user_agent()
@@ -612,15 +469,11 @@ class FutbinPriceMonitor:
             
             print(f"💰 Extracting BIN prices from: {futbin_url}")
             
-            # Target the exact price classes from the Market section
-            # First BIN price: class="price inline-with-icon lowest-price-1"
-            first_price_elem = soup.find(class_="price inline-with-icon lowest-price-1")
-            
-            # Second BIN price: class="lowest-price inline-with-icon"  
-            second_price_elem = soup.find(class_="lowest-price inline-with-icon")
-            
+            # Get EXACTLY the first and second lowest prices
             bin_prices = []
             
+            # First BIN price: class="price inline-with-icon lowest-price-1"
+            first_price_elem = soup.find(class_="price inline-with-icon lowest-price-1")
             if first_price_elem:
                 try:
                     first_price_text = first_price_elem.get_text(strip=True)
@@ -631,86 +484,33 @@ class FutbinPriceMonitor:
                 except Exception as e:
                     print(f"Error parsing first price: {e}")
             
-            if second_price_elem:
+            # Second BIN price: Find ONLY the first occurrence of "lowest-price inline-with-icon"
+            second_price_elements = soup.find_all(class_="lowest-price inline-with-icon")
+            if second_price_elements and len(second_price_elements) > 0:
                 try:
+                    # Take only the FIRST element (second lowest price)
+                    second_price_elem = second_price_elements[0]
                     second_price_text = second_price_elem.get_text(strip=True)
                     second_price = self.parse_price_text(second_price_text)
-                    if second_price > 0:
+                    if second_price > 0 and second_price != first_price:
                         bin_prices.append(second_price)
                         print(f"💰 Second BIN: {second_price:,} coins")
                 except Exception as e:
                     print(f"Error parsing second price: {e}")
             
-            # Also look for additional BIN prices in case there are more
-            # Sometimes there are multiple listings
-            additional_price_elements = soup.find_all(class_="lowest-price inline-with-icon")
-            for elem in additional_price_elements:
-                try:
-                    price_text = elem.get_text(strip=True)
-                    price = self.parse_price_text(price_text)
-                    if price > 0 and price not in bin_prices:
-                        bin_prices.append(price)
-                        print(f"💰 Additional BIN: {price:,} coins")
-                except Exception as e:
-                    continue
-            
-            # If we found BIN prices, assign them to platforms
-            if bin_prices:
-                # Sort prices (lowest first)
-                bin_prices = sorted(bin_prices)
-                print(f"💰 All BIN prices found: {[f'{p:,}' for p in bin_prices]}")
-                
-                # For now, assign to PS platform (most common)
-                # In future versions, we could detect platform-specific sections
+            # ONLY use the first two prices - ignore 3rd, 4th, etc.
+            if len(bin_prices) >= 2:
+                # Sort to ensure first is lowest, second is second lowest
+                bin_prices = sorted(bin_prices[:2])
+                print(f"💰 Final BIN prices: {bin_prices[0]:,} → {bin_prices[1]:,}")
                 prices['ps'] = bin_prices
-                
-                # If we have enough prices, also assign to other platforms
-                if len(bin_prices) >= 3:
-                    prices['xbox'] = bin_prices[1:]  # Offset slightly for Xbox
-                if len(bin_prices) >= 5:
-                    prices['pc'] = bin_prices[2:]    # Offset for PC
-            
-            else:
-                print("❌ No BIN prices found with target selectors")
-                
-                # Fallback: Look for any price-like elements in the Market section
-                # Sometimes the classes might be slightly different
-                market_section = soup.find(string="Market")
-                if market_section:
-                    market_container = market_section.find_parent()
-                    if market_container:
-                        # Look for any price elements in the market container
-                        price_elements = market_container.find_all(class_=lambda x: x and 'price' in str(x).lower())
-                        print(f"🔍 Found {len(price_elements)} price-related elements in Market section")
-                        
-                        fallback_prices = []
-                        for elem in price_elements:
-                            try:
-                                price_text = elem.get_text(strip=True)
-                                price = self.parse_price_text(price_text)
-                                if price > 1000:  # Reasonable minimum
-                                    fallback_prices.append(price)
-                            except:
-                                continue
-                        
-                        if fallback_prices:
-                            fallback_prices = sorted(list(set(fallback_prices)))
-                            prices['ps'] = fallback_prices[:5]  # Take top 5
-                            print(f"💰 Fallback prices: {[f'{p:,}' for p in fallback_prices[:5]]}")
-            
-            # Final validation
-            total_prices = sum(len(prices[p]) for p in prices)
-            if total_prices > 0:
-                print(f"✅ Successfully extracted {total_prices} BIN prices")
                 return prices
             else:
-                print("❌ No valid BIN prices found")
+                print(f"❌ Found only {len(bin_prices)} valid prices, need at least 2")
                 return None
             
         except Exception as e:
             print(f"Error scraping prices from {futbin_url}: {e}")
-            import traceback
-            traceback.print_exc()
             return None
     
     def parse_price_text(self, price_text):
@@ -889,8 +689,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         
     def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
         """Send Discord webhook notification"""
-        discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
-        if not discord_webhook_url:
+        if not Config.DISCORD_WEBHOOK_URL:
             return  # Discord not configured
         
         # Determine profit quality emoji
@@ -945,7 +744,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         }
         
         try:
-            response = requests.post(discord_webhook_url, json=payload)
+            response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
             if response.status_code == 204:
                 print("✅ Discord notification sent")
             else:
@@ -959,7 +758,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         cursor = conn.cursor()
         
         # Check if we already sent an alert for this card/platform recently
-        cooldown_time = datetime.now() - Config.get_alert_cooldown_timedelta()
+        cooldown_time = datetime.now() - timedelta(minutes=Config.ALERT_COOLDOWN_MINUTES)
         cursor.execute('''
             SELECT COUNT(*) FROM price_alerts 
             WHERE card_id = ? AND platform = ? AND alert_sent_at > ?
@@ -1085,6 +884,9 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print("🚀 Starting complete Futbin Price Gap Monitor system!")
         print("⚠️ Running on free tier - database will reset on restart")
         
+        # Send startup notification first
+        self.check_and_send_startup_notification()
+        
         # Check current database state
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1099,14 +901,6 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
             print("🚀 Database is empty - starting fresh scraping session")
             print(f"📄 Will scrape {Config.PAGES_TO_SCRAPE} pages for quick startup")
             
-            # Send startup notification
-            self.send_telegram_notification(
-                f"🤖 Futbin Bot Started!\n"
-                f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
-                f"⚡ Free tier - optimized for quick startup!\n"
-                f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%"
-            )
-            
             self.scrape_all_cards()
         else:
             print(f"✅ Found {card_count} cards in database. Starting monitoring...")
@@ -1115,6 +909,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print("🎯 Starting price monitoring for trading opportunities...")
         self.run_price_monitoring()
 
+# Entry point for running the monitor
 if __name__ == "__main__":
     # Run the complete system
     monitor = FutbinPriceMonitor()
