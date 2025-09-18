@@ -1,11 +1,9 @@
-# app.py (Web interface + background worker)
 from flask import Flask, render_template, jsonify
 import threading
 import time
 import os
 from datetime import datetime
 import sqlite3
-from futbin_monitor import FutbinPriceMonitor
 
 app = Flask(__name__)
 
@@ -13,6 +11,22 @@ app = Flask(__name__)
 monitor = None
 monitor_thread = None
 is_running = False
+
+def start_monitor():
+    """Start the price monitor in background"""
+    global monitor, is_running
+    try:
+        print("🔄 Attempting to start monitor...")
+        from futbin_monitor import FutbinPriceMonitor
+        monitor = FutbinPriceMonitor()
+        is_running = True
+        print("✅ Monitor initialized, starting complete system...")
+        monitor.run_complete_system()
+    except Exception as e:
+        print(f"❌ Monitor error: {e}")
+        is_running = False
+        import traceback
+        traceback.print_exc()
 
 @app.route('/')
 def home():
@@ -45,6 +59,12 @@ def home():
             <p>Recent alerts will appear in your Telegram chat.</p>
         </div>
         
+        <div style="background: #fff3cd; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ffeaa7;">
+            <h3>🔍 Debug Info</h3>
+            <p><strong>Monitor Thread Running:</strong> <span id="thread-status">Unknown</span></p>
+            <p><strong>Environment Check:</strong> <span id="env-status">Checking...</span></p>
+        </div>
+        
         <script>
             function checkStatus() {
                 fetch('/status')
@@ -54,6 +74,9 @@ def home():
                             '<strong>Monitor Status:</strong> ' + (data.running ? '🟢 Running' : '🔴 Stopped') + '<br>' +
                             '<strong>Cards in Database:</strong> ' + data.card_count + '<br>' +
                             '<strong>Last Update:</strong> ' + data.last_update;
+                        
+                        document.getElementById('thread-status').innerHTML = data.running ? '🟢 Yes' : '🔴 No';
+                        document.getElementById('env-status').innerHTML = data.env_check;
                     });
             }
             
@@ -69,22 +92,38 @@ def home():
 def status():
     """API endpoint to check bot status"""
     try:
-        conn = sqlite3.connect('futbin_cards.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM cards')
-        card_count = cursor.fetchone()[0]
-        conn.close()
+        # Check database
+        try:
+            conn = sqlite3.connect('futbin_cards.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM cards')
+            card_count = cursor.fetchone()[0]
+            conn.close()
+        except:
+            card_count = 0
+        
+        # Check environment variables
+        telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        telegram_chat = os.getenv('TELEGRAM_CHAT_ID')
+        
+        env_check = "✅ OK" if telegram_token and telegram_chat else "❌ Missing tokens"
         
         return jsonify({
             'running': is_running,
             'card_count': card_count,
-            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'),
+            'env_check': env_check,
+            'has_token': bool(telegram_token),
+            'has_chat_id': bool(telegram_chat)
         })
     except Exception as e:
         return jsonify({
             'running': False,
             'card_count': 0,
-            'last_update': 'Error: ' + str(e)
+            'last_update': 'Error: ' + str(e),
+            'env_check': '❌ Error',
+            'has_token': False,
+            'has_chat_id': False
         })
 
 @app.route('/health')
@@ -92,36 +131,43 @@ def health():
     """Health check for uptime monitoring"""
     return "OK", 200
 
-def start_monitor():
-    """Start the price monitor in background"""
-    global monitor, is_running
-    try:
-        monitor = FutbinPriceMonitor()
-        is_running = True
-        monitor.run_complete_system()
-    except Exception as e:
-        print(f"Monitor error: {e}")
-        is_running = False
+@app.route('/logs')  
+def logs():
+    """Simple logs viewer"""
+    return f"""
+    <h1>Recent Activity</h1>
+    <p>Monitor Running: {'🟢 Yes' if is_running else '🔴 No'}</p>
+    <p>Check the Render logs for detailed information.</p>
+    <a href="/">← Back to Dashboard</a>
+    """
 
 def keep_alive():
     """Ping self to prevent Render from sleeping"""
     while True:
         try:
             import requests
-            requests.get(f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/health")
-        except:
-            pass
+            hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
+            if hostname != 'localhost':
+                requests.get(f"https://{hostname}/health", timeout=10)
+                print("🏓 Keep-alive ping sent")
+        except Exception as e:
+            print(f"Keep-alive error: {e}")
         time.sleep(600)  # Ping every 10 minutes
 
 if __name__ == '__main__':
+    print("🚀 Starting Flask app with background monitor...")
+    
     # Start monitor in background thread
+    print("🔄 Starting monitor thread...")
     monitor_thread = threading.Thread(target=start_monitor, daemon=True)
     monitor_thread.start()
     
     # Start keep-alive thread
+    print("🔄 Starting keep-alive thread...")
     keepalive_thread = threading.Thread(target=keep_alive, daemon=True)
     keepalive_thread.start()
     
     # Start Flask web interface
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    print(f"🌐 Starting web server on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False)
