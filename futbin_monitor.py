@@ -1237,25 +1237,25 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
         
     def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
-    """Send Discord notification matching the exact format shown"""
-    if not Config.DISCORD_WEBHOOK_URL:
-        return  # Discord not configured
-    
-    # Simple color based on profit margin
-    if profit_margin >= 30:
-        color = 0xff4500  # Red-orange
-    elif profit_margin >= 20:
-        color = 0x00ff00  # Green
-    elif profit_margin >= 10:
-        color = 0xffa500  # Orange
-    else:
-        color = 0x0099ff  # Blue
-    
-    # Title exactly like Image 2
-    title = "FutBin Error Found 🔍"
-    
-    # Description with exact format from Image 2
-    description = f"""**Player**
+        """Send Discord notification matching the exact format shown"""
+        if not Config.DISCORD_WEBHOOK_URL:
+            return  # Discord not configured
+        
+        # Simple color based on profit margin
+        if profit_margin >= 30:
+            color = 0xff4500  # Red-orange
+        elif profit_margin >= 20:
+            color = 0x00ff00  # Green
+        elif profit_margin >= 10:
+            color = 0xffa500  # Orange
+        else:
+            color = 0x0099ff  # Blue
+        
+        # Title exactly like Image 2
+        title = "FutBin Error Found 🔍"
+        
+        # Description with exact format from Image 2
+        description = f"""**Player**
 {card_info['name']}
 **Platform**
 {platform.title()}
@@ -1269,28 +1269,28 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
 {gap_info['profit_after_tax']:,}
 **Link**
 [FutBin]({card_info['futbin_url']})"""
-    
-    # Simple embed that matches Image 2 format
-    embed = {
-        "title": title,
-        "description": description,
-        "color": color,
-        "url": card_info['futbin_url'],
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    payload = {
-        "embeds": [embed]
-    }
-    
-    try:
-        response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
-        if response.status_code == 204:
-            print("✅ FutBin format Discord notification sent")
-        else:
-            print(f"❌ Discord error: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Discord error: {e}")
+        
+        # Simple embed that matches Image 2 format
+        embed = {
+            "title": title,
+            "description": description,
+            "color": color,
+            "url": card_info['futbin_url'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        payload = {
+            "embeds": [embed]
+        }
+        
+        try:
+            response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
+            if response.status_code == 204:
+                print("✅ FutBin format Discord notification sent")
+            else:
+                print(f"❌ Discord error: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Discord error: {e}")
     
     def save_price_alert(self, card_id, platform, gap_info):
         """Save price alert to database and prevent duplicates"""
