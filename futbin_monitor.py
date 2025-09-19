@@ -1237,21 +1237,21 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
         
     def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
-    """Send Discord notification with proper player name and same image as Telegram"""
-    if not Config.DISCORD_WEBHOOK_URL:
-        return  # Discord not configured
-    
-    # Color based on profit margin
-    if profit_margin >= 30:
-        color = 0xff4500  # Red-orange
-    elif profit_margin >= 20:
-        color = 0x00ff00  # Green
-    elif profit_margin >= 10:
-        color = 0xffa500  # Orange
-    else:
-        color = 0x0099ff  # Blue
-    
-    # Extract player image from Futbin page (same image that shows in Telegram)
+        """Send Discord notification with proper player name and same image as Telegram"""
+        if not Config.DISCORD_WEBHOOK_URL:
+            return  # Discord not configured
+        
+        # Color based on profit margin
+        if profit_margin >= 30:
+            color = 0xff4500  # Red-orange
+        elif profit_margin >= 20:
+            color = 0x00ff00  # Green
+        elif profit_margin >= 10:
+            color = 0xffa500  # Orange
+        else:
+            color = 0x0099ff  # Blue
+        
+        # Extract player image from Futbin page (same image that shows in Telegram)
     def get_player_image_from_url(self, futbin_url):
         """Extract the og:image from Futbin page - same image Telegram shows"""
         try:
