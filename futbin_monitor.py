@@ -1087,6 +1087,45 @@ class FutbinPriceMonitor:
             'percentage_profit': percentage_profit,
             'ea_tax': int(ea_tax)
         }
+
+    def simple_price_gap_analysis(self, prices_list):
+        """Simple fallback price gap analysis without intelligence features"""
+        if len(prices_list) < 2:
+            return None
+        
+        sorted_prices = sorted(prices_list)
+        buy_price = sorted_prices[0]
+        sell_price = sorted_prices[1]
+        
+        # Basic validation
+        if buy_price <= 0 or sell_price <= 0 or sell_price <= buy_price:
+            return None
+        
+        if buy_price < Config.MINIMUM_CARD_PRICE:
+            return None
+        
+        # Calculate EA tax and profit
+        ea_tax = sell_price * 0.05
+        sell_price_after_tax = sell_price - ea_tax
+        profit_after_tax = sell_price_after_tax - buy_price
+        
+        if profit_after_tax < Config.MINIMUM_PRICE_GAP_COINS:
+            return None
+        
+        percentage_profit = (profit_after_tax / buy_price) * 100
+        
+        if percentage_profit < Config.MINIMUM_PRICE_GAP_PERCENTAGE:
+            return None
+        
+        return {
+            'buy_price': buy_price,
+            'sell_price': sell_price,
+            'sell_price_after_tax': int(sell_price_after_tax),
+            'raw_profit': sell_price - buy_price,
+            'profit_after_tax': int(profit_after_tax),
+            'percentage_profit': percentage_profit,
+            'ea_tax': int(ea_tax)
+        }
     
     def send_telegram_notification(self, message):
         """Send notification to Telegram using config"""
@@ -1479,7 +1518,13 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
                         if prices:
                             for platform, price_list in prices.items():
                                 if len(price_list) >= 2:
-                                    gap_info = self.analyze_price_gap(price_list, card['id'])
+                                    # Use simple price gap analysis if advanced method fails
+                                    try:
+                                        gap_info = self.analyze_price_gap(price_list, card['id'])
+                                    except Exception as e:
+                                        print(f"Error in advanced analysis, using simple analysis: {e}")
+                                        gap_info = self.simple_price_gap_analysis(price_list)
+                                    
                                     if gap_info:
                                         self.send_price_alert(card, platform, gap_info)
                                         alerts_sent += 1
