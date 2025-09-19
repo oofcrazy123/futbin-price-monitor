@@ -367,6 +367,8 @@ def reliability_dashboard():
         
         conn.close()
         
+        avg_score_formatted = f"{avg_score:.1f}" if avg_score else "0.0"
+        
         return f'''
         <html>
         <head><title>Market Intelligence Dashboard</title></head>
@@ -380,7 +382,7 @@ def reliability_dashboard():
                 </div>
                 <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
                     <h3>Avg Reliability</h3>
-                    <div style="font-size: 2em; font-weight: bold; color: #28a745;">{avg_score:.1f}%</div>
+                    <div style="font-size: 2em; font-weight: bold; color: #28a745;">{avg_score_formatted}%</div>
                 </div>
                 <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
                     <h3>Blacklisted</h3>
