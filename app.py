@@ -146,11 +146,11 @@ def home():
     <html>
     <head><title>Futbin Price Monitor</title></head>
     <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
-        <h1>🤖 Futbin Price Gap Monitor</h1>
+        <h1>&#129302; Futbin Price Gap Monitor</h1>
         <p>Your bot is running in the background!</p>
         
         <div style="background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <h3>📊 Status</h3>
+            <h3>&#128202; Status</h3>
             <p id="status">Loading...</p>
             <button onclick="checkStatus()" style="padding: 10px 20px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer;">
                 Refresh Status
@@ -158,20 +158,20 @@ def home():
         </div>
         
         <div style="background: #e8f4f8; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <h3>🔧 Configuration</h3>
+            <h3>&#128295; Configuration</h3>
             <p><strong>Price Gap Threshold:</strong> 1,000+ coins & 5%+</p>
             <p><strong>Minimum Card Value:</strong> 5,000 coins</p>
             <p><strong>Check Interval:</strong> Every 45 minutes</p>
         </div>
         
         <div style="background: #f0f8e8; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <h3>📱 Alerts</h3>
+            <h3>&#128241; Alerts</h3>
             <p>Trading opportunities are sent to your Telegram!</p>
             <p>Recent alerts will appear in your Telegram chat.</p>
         </div>
         
         <div style="background: #e8f0ff; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <h3>💾 Database Backup</h3>
+            <h3>&#128190; Database Backup</h3>
             <p><strong>Cards in Database:</strong> <span id="card-count">Loading...</span></p>
             <div style="margin: 15px 0;">
                 <a href="/download-db" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 4px; margin-right: 10px;">
@@ -187,13 +187,13 @@ def home():
         </div>
         
         <div style="background: #fff3cd; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ffeaa7;">
-            <h3>🔍 Debug Info</h3>
+            <h3>&#128269; Debug Info</h3>
             <p><strong>Monitor Thread Running:</strong> <span id="thread-status">Unknown</span></p>
             <p><strong>Environment Check:</strong> <span id="env-status">Checking...</span></p>
         </div>
         
         <div style="background: #f0f8ff; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <h3>🧠 Market Intelligence</h3>
+            <h3>&#129504; Market Intelligence</h3>
             <p>Advanced pattern recognition and reliability scoring system</p>
             <a href="/reliability" style="padding: 10px 20px; background: #6f42c1; color: white; text-decoration: none; border-radius: 4px;">
                 View Intelligence Dashboard
