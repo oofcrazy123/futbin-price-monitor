@@ -257,6 +257,38 @@ def reliability_dashboard():
         conn = sqlite3.connect('futbin_cards.db')
         cursor = conn.cursor()
         
+        # Create tables if they don't exist (for existing databases)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS card_reliability (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_id INTEGER,
+                suspicious_pattern_count INTEGER DEFAULT 0,
+                fake_alert_count INTEGER DEFAULT 0,
+                valid_alert_count INTEGER DEFAULT 0,
+                reliability_score REAL DEFAULT 100.0,
+                last_suspicious_at TIMESTAMP,
+                blacklisted BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (card_id) REFERENCES cards (id),
+                UNIQUE(card_id)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS price_pattern_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_id INTEGER,
+                price_sequence TEXT,
+                pattern_type TEXT,
+                flagged_as_suspicious BOOLEAN DEFAULT 0,
+                detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (card_id) REFERENCES cards (id)
+            )
+        ''')
+        
+        conn.commit()
+        
         cursor.execute('''
             SELECT 
                 COUNT(*) as total_tracked,
@@ -295,13 +327,19 @@ def reliability_dashboard():
         avg_score_formatted = f"{avg_score:.1f}" if avg_score else "0.0"
         
         patterns_html = ""
-        for pattern, count in suspicious_patterns:
-            patterns_html += f'<tr><td style="padding: 8px; border-bottom: 1px solid #f1f3f4;">{pattern}</td><td style="padding: 8px; text-align: right; border-bottom: 1px solid #f1f3f4;">{count}</td></tr>'
+        if suspicious_patterns:
+            for pattern, count in suspicious_patterns:
+                patterns_html += f'<tr><td style="padding: 8px; border-bottom: 1px solid #f1f3f4;">{pattern}</td><td style="padding: 8px; text-align: right; border-bottom: 1px solid #f1f3f4;">{count}</td></tr>'
+        else:
+            patterns_html = '<tr><td colspan="2" style="padding: 8px; text-align: center; color: #666;">No suspicious patterns detected yet</td></tr>'
         
         cards_html = ""
-        for name, score, fake, valid, blacklisted in worst_cards:
-            status_icon = "&#128683;" if blacklisted else "&#9888;"
-            cards_html += f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{status_icon}</td></tr>'
+        if worst_cards:
+            for name, score, fake, valid, blacklisted in worst_cards:
+                status_icon = "&#128683;" if blacklisted else "&#9888;"
+                cards_html += f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{status_icon}</td></tr>'
+        else:
+            cards_html = '<tr><td colspan="3" style="padding: 8px; text-align: center; color: #666;">No card reliability data yet - system is learning</td></tr>'
         
         html_content = f"""
         <html>
@@ -359,6 +397,8 @@ def reliability_dashboard():
                 <p><strong>Reliability Scoring:</strong> Each card gets a score (0-100) based on how often its alerts are legitimate vs fake. Low-scoring cards get filtered out.</p>
                 <p><strong>Auto-Blacklisting:</strong> Cards with reliability scores below 20% and multiple failed alerts are automatically blocked from generating future alerts.</p>
                 <p><strong>Learning System:</strong> The bot continuously learns which cards produce genuine opportunities vs market manipulation attempts.</p>
+                
+                {"<p><strong>Status:</strong> Intelligence system is initializing. Data will populate as the bot monitors more cards and detects patterns.</p>" if total_tracked == 0 else ""}
             </div>
             
             <a href="/">&larr; Back to Dashboard</a>
