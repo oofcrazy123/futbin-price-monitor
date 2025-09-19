@@ -28,16 +28,17 @@ class Config:
     # =============================================================================
     # PRICE GAP ALERT CONFIGURATION
     # =============================================================================
-    MINIMUM_PRICE_GAP_COINS = int(os.getenv('MINIMUM_PRICE_GAP_COINS', '500'))
+    MINIMUM_PRICE_GAP_COINS = int(os.getenv('MINIMUM_PRICE_GAP_COINS', '1000'))
     MINIMUM_PRICE_GAP_PERCENTAGE = float(os.getenv('MINIMUM_PRICE_GAP_PERCENTAGE', '5'))
-    MINIMUM_CARD_PRICE = int(os.getenv('MINIMUM_CARD_PRICE', '2000'))
+    MINIMUM_CARD_PRICE = int(os.getenv('MINIMUM_CARD_PRICE', '5000'))
     
     # =============================================================================
     # SCRAPING CONFIGURATION  
     # =============================================================================
-    PAGES_TO_SCRAPE = int(os.getenv('PAGES_TO_SCRAPE', '786'))  # Reduced for faster startup
+    PAGES_TO_SCRAPE = int(os.getenv('PAGES_TO_SCRAPE', '50'))  # Reduced for faster startup
     MAX_PAGES = int(os.getenv('MAX_PAGES', '786'))
     CARDS_PER_PAGE = int(os.getenv('CARDS_PER_PAGE', '30'))
+    SKIP_SCRAPING = os.getenv('SKIP_SCRAPING', 'False').lower() == 'true'
     
     # =============================================================================
     # MONITORING CONFIGURATION

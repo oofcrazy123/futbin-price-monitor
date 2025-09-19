@@ -1146,14 +1146,43 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         
         print(f"📊 Current cards in database: {card_count}")
         
-        # On free tier, we'll always start fresh, so reduce scraping pages for faster startup
-        if card_count == 0:
+        # Check if scraping should be skipped
+        if Config.SKIP_SCRAPING:
+            print("⚠️ SKIP_SCRAPING enabled - bypassing scraping phase")
+            if card_count == 0:
+                print("❌ WARNING: Database is empty but scraping is disabled!")
+                self.send_notification_to_all(
+                    "⚠️ Database is empty but scraping is disabled!\n"
+                    "Remove SKIP_SCRAPING environment variable to enable scraping.",
+                    "❌ Configuration Warning"
+                )
+            else:
+                print(f"✅ Using existing {card_count:,} cards in database")
+                self.send_notification_to_all(
+                    f"✅ Using existing database with {card_count:,} cards\n"
+                    f"🤖 Starting price monitoring immediately!",
+                    "📊 Monitoring Started"
+                )
+        elif card_count == 0:
             print("🚀 Database is empty - starting fresh scraping session")
             print(f"📄 Will scrape {Config.PAGES_TO_SCRAPE} pages for quick startup")
             
             self.scrape_all_cards()
+        elif card_count < 1000:
+            print(f"⚠️ Database has only {card_count} cards - may want to scrape more")
+            self.send_notification_to_all(
+                f"⚠️ Database has only {card_count:,} cards\n"
+                f"🤖 Starting monitoring with existing data\n"
+                f"💡 Consider re-scraping for more comprehensive coverage",
+                "📊 Monitoring Started"
+            )
         else:
-            print(f"✅ Found {card_count} cards in database. Starting monitoring...")
+            print(f"✅ Found {card_count:,} cards in database. Starting monitoring...")
+            self.send_notification_to_all(
+                f"✅ Database loaded with {card_count:,} cards\n"
+                f"🤖 Starting price monitoring for trading opportunities!",
+                "📊 Monitoring Started"
+            )
         
         # Start price monitoring immediately after scraping
         print("🎯 Starting price monitoring for trading opportunities...")
