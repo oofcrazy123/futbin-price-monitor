@@ -116,35 +116,6 @@ class FutbinPriceMonitor:
                 )
             ''')
             
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS card_reliability (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    card_id INTEGER,
-                    suspicious_pattern_count INTEGER DEFAULT 0,
-                    fake_alert_count INTEGER DEFAULT 0,
-                    valid_alert_count INTEGER DEFAULT 0,
-                    reliability_score REAL DEFAULT 100.0,
-                    last_suspicious_at TIMESTAMP,
-                    blacklisted BOOLEAN DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (card_id) REFERENCES cards (id),
-                    UNIQUE(card_id)
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS price_pattern_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    card_id INTEGER,
-                    price_sequence TEXT,
-                    pattern_type TEXT,
-                    flagged_as_suspicious BOOLEAN DEFAULT 0,
-                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (card_id) REFERENCES cards (id)
-                )
-            ''')
-            
             conn.commit()
             
             # Test if we can actually read/write
@@ -175,7 +146,6 @@ class FutbinPriceMonitor:
             cursor = conn.cursor()
             
             # Use a more aggressive lock to prevent race conditions
-            # Try to insert our instance ID immediately - this will fail if another instance is already starting
             cursor.execute('''
                 INSERT INTO startup_locks (instance_id, startup_time)
                 VALUES (?, ?)
@@ -189,10 +159,10 @@ class FutbinPriceMonitor:
             # Send startup notification
             self.send_notification_to_all(
                 f"🤖 Futbin Bot Started!\n"
-                f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
+                f"📊 Scraping {getattr(Config, 'PAGES_TO_SCRAPE', 50)} pages\n"
                 f"⚡ Running on cloud infrastructure\n"
-                f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%\n"
-                f"⏰ Alert cooldown: {Config.ALERT_COOLDOWN_MINUTES} minutes\n"
+                f"💰 Alert thresholds: {getattr(Config, 'MINIMUM_PRICE_GAP_COINS', 5000):,} coins, {getattr(Config, 'MINIMUM_PRICE_GAP_PERCENTAGE', 10)}%\n"
+                f"⏰ Alert cooldown: {getattr(Config, 'ALERT_COOLDOWN_MINUTES', 30)} minutes\n"
                 f"🔑 Instance: {instance_id[:12]}",
                 "🚀 Bot Started"
             )
@@ -215,9 +185,7 @@ class FutbinPriceMonitor:
                 pass
     
     def scrape_futbin_cards_list(self, page_num):
-        """
-        Scrape cards from a Futbin players page - Updated for current structure
-        """
+        """Scrape cards from a Futbin players page - Updated for current structure"""
         try:
             self.rotate_user_agent()
             
@@ -233,25 +201,6 @@ class FutbinPriceMonitor:
             cards = []
             
             print(f"📄 Page {page_num} - Content length: {len(response.content)} bytes")
-            
-            # Debug: Save a sample of the HTML to see the actual structure
-            if page_num == 1:
-                print("🔍 DEBUG: Analyzing page structure...")
-                print(f"Page title: {soup.title.string if soup.title else 'No title'}")
-                
-                # Look for any tables on the page
-                all_tables = soup.find_all('table')
-                print(f"Found {len(all_tables)} tables on the page")
-                
-                # Look for any player links
-                all_player_links = soup.find_all('a', href=lambda x: x and '/player/' in str(x))
-                print(f"Found {len(all_player_links)} total player links")
-                
-                if len(all_player_links) < 10:
-                    print("⚠️ WARNING: Very few player links found - website structure may have changed")
-                    print("First few links found:")
-                    for i, link in enumerate(all_player_links[:5]):
-                        print(f"  {i+1}. {link.get('href')} - {link.get_text(strip=True)}")
             
             # Look for the main players table
             players_table = soup.find('table', class_='futbin-table players-table')
@@ -273,9 +222,6 @@ class FutbinPriceMonitor:
                     player_rows = tbody.find_all('tr')
                     print(f"🔍 Found {len(player_rows)} rows in tbody")
                     
-                    if len(player_rows) == 0:
-                        print("⚠️ WARNING: No rows found in tbody - this could be why card count is low")
-                    
                     for i, row in enumerate(player_rows):
                         try:
                             # Look for player links in this row
@@ -288,9 +234,6 @@ class FutbinPriceMonitor:
                                     cards.append(card_data)
                                     if i < 3:  # Show first 3 for debugging
                                         print(f"✅ Extracted: {card_data['name']} ({card_data['rating']})")
-                                else:
-                                    if i < 3:  # Show failures for first few rows
-                                        print(f"❌ Failed to extract from row {i+1}")
                         except Exception as e:
                             print(f"Error processing row {i}: {e}")
                             continue
@@ -331,11 +274,6 @@ class FutbinPriceMonitor:
                         continue
             
             print(f"✅ Page {page_num}: Extracted {len(cards)} cards total")
-            
-            # Show sample of extracted cards
-            for i, card in enumerate(cards[:3]):
-                print(f"🃏 Card {i+1}: {card['name']} ({card['rating']}) - {card['futbin_id']}")
-            
             return cards
             
         except Exception as e:
@@ -470,33 +408,15 @@ class FutbinPriceMonitor:
         return saved_count
     
     def scrape_all_cards(self):
-        """Scrape cards from all pages (like the GitHub repo but YOUR database)"""
-        print(f"🚀 Starting to scrape {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE} cards)...")
+        """Scrape cards from all pages"""
+        pages_to_scrape = getattr(Config, 'PAGES_TO_SCRAPE', 50)
+        print(f"🚀 Starting to scrape {pages_to_scrape} pages...")
         
         total_saved = 0
         
-        for page in range(1, Config.PAGES_TO_SCRAPE + 1):
+        for page in range(1, pages_to_scrape + 1):
             try:
-                # CHECK FOR DATABASE UPLOAD BEFORE EACH PAGE
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute('SELECT COUNT(*) FROM cards')
-                current_card_count = cursor.fetchone()[0]
-                conn.close()
-                
-                # If database suddenly has many cards, someone uploaded a database
-                if current_card_count > total_saved + 100:  # Significant jump indicates upload
-                    print(f"🔄 DATABASE UPLOAD DETECTED! Found {current_card_count:,} cards (was {total_saved})")
-                    self.send_notification_to_all(
-                        f"🔄 Database upload detected during scraping!\n"
-                        f"📊 Found {current_card_count:,} cards in database\n"
-                        f"⏹️ Stopping scraping and switching to monitoring\n"
-                        f"✅ No need to continue scraping!",
-                        "🔄 Database Upload Detected"
-                    )
-                    return current_card_count
-                
-                print(f"📄 Scraping page {page}/{Config.PAGES_TO_SCRAPE}...")
+                print(f"📄 Scraping page {page}/{pages_to_scrape}...")
                 
                 cards = self.scrape_futbin_cards_list(page)
                 if cards:
@@ -506,20 +426,8 @@ class FutbinPriceMonitor:
                 else:
                     print(f"⚠️ Page {page}: No cards found")
                 
-                # Progress notification every N pages (configurable) - but not too frequent
-                if page % Config.PROGRESS_NOTIFICATION_INTERVAL == 0 and page > 0:
-                    print(f"📊 Progress: {page}/{Config.PAGES_TO_SCRAPE} pages, {total_saved} cards saved")
-                    # Only send notification every 50 pages to avoid spam
-                    if page % 50 == 0:
-                        self.send_notification_to_all(
-                            f"📊 Scraping Progress: {page}/{Config.PAGES_TO_SCRAPE} pages complete\n"
-                            f"💾 Total cards saved: {total_saved}",
-                            "📊 Scraping Progress"
-                        )
-                
-                # Random delay between pages (configurable)
-                delay_min, delay_max = Config.get_scraping_delay_range()
-                time.sleep(random.uniform(delay_min, delay_max))
+                # Random delay between pages
+                time.sleep(random.uniform(2, 5))
                 
             except Exception as e:
                 print(f"❌ Error on page {page}: {e}")
@@ -528,7 +436,7 @@ class FutbinPriceMonitor:
         print(f"🎉 Scraping complete! Total cards saved: {total_saved}")
         self.send_notification_to_all(
             f"🎉 Futbin scraping complete!\n"
-            f"📊 Pages scraped: {Config.PAGES_TO_SCRAPE}\n"
+            f"📊 Pages scraped: {pages_to_scrape}\n"
             f"💾 Total cards in database: {total_saved}\n"
             f"🤖 Price monitoring will start now!",
             "✅ Scraping Complete"
@@ -537,10 +445,7 @@ class FutbinPriceMonitor:
         return total_saved
     
     def scrape_card_prices(self, futbin_url):
-        """
-        Scrape current BIN prices from a card's individual Futbin page
-        Target ONLY the first and second lowest BIN prices
-        """
+        """Scrape current BIN prices from a card's individual Futbin page"""
         try:
             self.rotate_user_agent()
             response = self.session.get(futbin_url)
@@ -550,8 +455,6 @@ class FutbinPriceMonitor:
             
             soup = BeautifulSoup(response.content, 'html.parser')
             prices = {'ps': [], 'xbox': [], 'pc': []}
-            
-            print(f"💰 Extracting BIN prices from: {futbin_url}")
             
             # Get EXACTLY the first and second lowest prices
             bin_prices = []
@@ -564,7 +467,6 @@ class FutbinPriceMonitor:
                     first_price = self.parse_price_text(first_price_text)
                     if first_price > 0:
                         bin_prices.append(first_price)
-                        print(f"💰 First BIN: {first_price:,} coins")
                 except Exception as e:
                     print(f"Error parsing first price: {e}")
             
@@ -578,7 +480,6 @@ class FutbinPriceMonitor:
                     second_price = self.parse_price_text(second_price_text)
                     if second_price > 0 and second_price != first_price:
                         bin_prices.append(second_price)
-                        print(f"💰 Second BIN: {second_price:,} coins")
                 except Exception as e:
                     print(f"Error parsing second price: {e}")
             
@@ -586,11 +487,9 @@ class FutbinPriceMonitor:
             if len(bin_prices) >= 2:
                 # Sort to ensure first is lowest, second is second lowest
                 bin_prices = sorted(bin_prices[:2])
-                print(f"💰 Final BIN prices: {bin_prices[0]:,} → {bin_prices[1]:,}")
                 prices['ps'] = bin_prices
                 return prices
             else:
-                print(f"❌ Found only {len(bin_prices)} valid prices, need at least 2")
                 return None
             
         except Exception as e:
@@ -617,318 +516,9 @@ class FutbinPriceMonitor:
                 return int(cleaned)
         except:
             return 0
-    
-    def is_popular_card(self, card_id, card_name, card_rating):
-        """Detect if a card is likely popular based on monitoring patterns and characteristics"""
-        
-        # High-rated players are inherently popular
-        if card_rating >= 84:
-            return True
-        
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Check monitoring frequency - popular cards get checked more often
-            cursor.execute('''
-                SELECT COUNT(*) FROM price_pattern_history 
-                WHERE card_id = ? AND detected_at > datetime('now', '-7 days')
-            ''', (card_id,))
-            
-            recent_checks = cursor.fetchone()[0]
-            
-            # Check alert frequency - popular cards generate more alerts (real or fake)
-            cursor.execute('''
-                SELECT COUNT(*) FROM price_alerts 
-                WHERE card_id = ? AND alert_sent_at > datetime('now', '-7 days')
-            ''', (card_id,))
-            
-            recent_alerts = cursor.fetchone()[0]
-            
-            conn.close()
-            
-            # Popular card indicators:
-            # 1. High monitoring frequency (checked 3+ times in last week)
-            # 2. High alert frequency (2+ alerts in last week)
-            # 3. Medium-high rating (80+)
-            # 4. Special card indicators in name
-            
-            is_frequently_monitored = recent_checks >= 3
-            is_frequently_alerted = recent_alerts >= 2
-            is_high_rated = card_rating >= 80
-            
-            # Special card detection
-            special_indicators = ['totw', 'if', 'sbc', 'otw', 'rttk', 'heroes', 'icon', 'inform']
-            has_special_indicator = any(indicator in card_name.lower() for indicator in special_indicators)
-            
-            # Position-based popularity (popular positions)
-            popular_positions = ['st', 'cf', 'cam', 'cm', 'cdm', 'cb', 'gk']
-            # This would need position data from the card, but we can infer from name sometimes
-            
-            # Calculate popularity score
-            popularity_score = 0
-            
-            if is_frequently_monitored:
-                popularity_score += 3
-            if is_frequently_alerted:
-                popularity_score += 3
-            if is_high_rated:
-                popularity_score += 2
-            if has_special_indicator:
-                popularity_score += 2
-            if card_rating >= 85:
-                popularity_score += 1
-            
-            # Consider popular if score >= 4
-            is_popular = popularity_score >= 4
-            
-            if is_popular:
-                print(f"📈 POPULAR CARD DETECTED: {card_name} (score: {popularity_score}, checks: {recent_checks}, alerts: {recent_alerts})")
-            
-            return is_popular
-            
-        except Exception as e:
-            print(f"Error checking card popularity: {e}")
-            # Default to rating-based detection if database check fails
-            return card_rating >= 84
-    
-    def update_card_monitoring_stats(self, card_id):
-        """Track how often cards are being monitored to identify trending/popular cards"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Simple tracking - just log that we checked this card
-            cursor.execute('''
-                INSERT INTO price_pattern_history 
-                (card_id, price_sequence, pattern_type, flagged_as_suspicious)
-                VALUES (?, ?, ?, ?)
-            ''', (card_id, "monitoring_check", "monitoring_log", False))
-            
-            conn.commit()
-            conn.close()
-            
-        except Exception as e:
-            # Don't let monitoring stats errors break the main flow
-            pass
-
-    def analyze_price_pattern(self, card_id, prices_list, card_name="", card_rating=0):
-        """Enhanced price pattern analysis with dynamic popular card detection"""
-        try:
-            if len(prices_list) < 3:
-                return {"suspicious": False, "pattern_type": "insufficient_data"}
-            
-            # Track monitoring activity for popularity detection
-            self.update_card_monitoring_stats(card_id)
-            
-            sorted_prices = sorted(prices_list)
-            price_sequence = ",".join(str(p) for p in sorted_prices)
-            
-            suspicious_flags = []
-            pattern_type = "normal"
-            
-            # Check if this is a popular card using dynamic detection
-            is_popular = self.is_popular_card(card_id, card_name, card_rating)
-            
-            # Pattern 1: Extreme outlier detection (stricter for popular cards)
-            if len(sorted_prices) >= 3:
-                first_price = sorted_prices[0]
-                median_price = sorted_prices[len(sorted_prices)//2]
-                
-                # Stricter thresholds for popular cards
-                threshold = 0.4 if is_popular else 0.5  # Popular cards: 40% vs 50%
-                
-                if first_price < (median_price * threshold) and first_price > 10000:
-                    suspicious_flags.append("extreme_outlier")
-                    pattern_type = "outlier_manipulation"
-                    if is_popular:
-                        suspicious_flags.append("popular_card_manipulation")
-            
-            # Pattern 2: Round number clustering (more sensitive for popular cards)
-            round_number_count = 0
-            for price in sorted_prices:
-                price_str = str(price)
-                trailing_zeros = len(price_str) - len(price_str.rstrip('0'))
-                min_zeros = 2 if is_popular else 3  # Popular cards: 2+ zeros vs 3+
-                if trailing_zeros >= min_zeros and price >= 50000:
-                    round_number_count += 1
-            
-            threshold_count = 2 if is_popular else 3  # Need fewer round numbers for popular cards
-            if round_number_count >= threshold_count and len(sorted_prices) >= 3:
-                suspicious_flags.append("round_number_clustering")
-                pattern_type = "round_manipulation"
-            
-            # Pattern 3: Price gap analysis (stricter for popular cards)
-            if len(sorted_prices) >= 4:
-                gaps = []
-                for i in range(len(sorted_prices) - 1):
-                    gap = sorted_prices[i + 1] - sorted_prices[i]
-                    gaps.append(gap)
-                
-                if len(gaps) >= 3:
-                    first_gap = gaps[0]
-                    avg_other_gaps = sum(gaps[1:]) / len(gaps[1:])
-                    
-                    # Popular cards: 3x vs 5x threshold
-                    multiplier = 3 if is_popular else 5
-                    min_gap = 25000 if is_popular else 50000
-                    
-                    if first_gap > (avg_other_gaps * multiplier) and first_gap > min_gap:
-                        suspicious_flags.append("isolated_low_price")
-                        pattern_type = "isolation_manipulation"
-            
-            # Pattern 4: Sequential pricing detection
-            if len(sorted_prices) >= 4:
-                sequential_count = 0
-                common_intervals = [500, 1000, 2000, 5000, 10000] if is_popular else [1000, 2000, 5000, 10000]
-                
-                for i in range(len(sorted_prices) - 1):
-                    price_diff = sorted_prices[i + 1] - sorted_prices[i]
-                    if price_diff in common_intervals:
-                        sequential_count += 1
-                
-                if sequential_count >= 2:
-                    suspicious_flags.append("sequential_pricing")
-                    pattern_type = "bot_manipulation"
-            
-            # Pattern 5: Popular card specific - "Too good to be true" detection
-            if is_popular and len(sorted_prices) >= 2:
-                first_price = sorted_prices[0]
-                second_price = sorted_prices[1]
-                
-                # For popular cards, even 15% gaps can be suspicious (lowered from 20%)
-                if (second_price - first_price) / first_price > 0.15 and first_price > 50000:
-                    suspicious_flags.append("popular_card_gap")
-                    pattern_type = "popular_manipulation"
-            
-            # Save pattern to database
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            is_suspicious = len(suspicious_flags) > 0
-            
-            cursor.execute('''
-                INSERT INTO price_pattern_history 
-                (card_id, price_sequence, pattern_type, flagged_as_suspicious)
-                VALUES (?, ?, ?, ?)
-            ''', (card_id, price_sequence, pattern_type, is_suspicious))
-            
-            conn.commit()
-            conn.close()
-            
-            # Higher confidence scoring for popular cards
-            base_confidence = 35 if is_popular else 25
-            confidence = len(suspicious_flags) * base_confidence
-            
-            if is_popular and is_suspicious:
-                print(f"⚠️ POPULAR CARD MANIPULATION: {card_name} - {pattern_type}")
-            
-            return {
-                "suspicious": is_suspicious,
-                "pattern_type": pattern_type,
-                "flags": suspicious_flags,
-                "confidence": min(100, confidence),  # Cap at 100%
-                "is_popular_card": is_popular
-            }
-            
-        except Exception as e:
-            print(f"Error analyzing price pattern: {e}")
-            return {"suspicious": False, "pattern_type": "analysis_error"}
-    
-    def update_card_reliability(self, card_id, is_fake_alert=False, is_valid_alert=False):
-        """Update reliability score for a card based on alert outcomes"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get or create reliability record
-            cursor.execute('''
-                INSERT OR IGNORE INTO card_reliability (card_id) VALUES (?)
-            ''', (card_id,))
-            
-            cursor.execute('''
-                SELECT suspicious_pattern_count, fake_alert_count, valid_alert_count, reliability_score
-                FROM card_reliability WHERE card_id = ?
-            ''', (card_id,))
-            
-            row = cursor.fetchone()
-            if not row:
-                return
-            
-            suspicious_count, fake_count, valid_count, current_score = row
-            
-            # Update counters
-            if is_fake_alert:
-                fake_count += 1
-                current_score -= 15  # Reduce score for fake alerts
-            elif is_valid_alert:
-                valid_count += 1
-                current_score += 5   # Increase score for valid alerts
-            
-            # Calculate new reliability score
-            total_alerts = fake_count + valid_count
-            if total_alerts > 0:
-                success_rate = valid_count / total_alerts
-                current_score = 50 + (success_rate * 50)  # Scale from 50-100
-            
-            # Clamp score between 0-100
-            current_score = max(0, min(100, current_score))
-            
-            # Auto-blacklist cards with very low reliability
-            blacklisted = current_score < 20 and total_alerts >= 3
-            
-            cursor.execute('''
-                UPDATE card_reliability 
-                SET fake_alert_count = ?, valid_alert_count = ?, reliability_score = ?, 
-                    blacklisted = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE card_id = ?
-            ''', (fake_count, valid_count, current_score, blacklisted, card_id))
-            
-            conn.commit()
-            conn.close()
-            
-            if blacklisted:
-                print(f"⚠️ Card {card_id} auto-blacklisted due to low reliability score: {current_score:.1f}")
-            
-        except Exception as e:
-            print(f"Error updating card reliability: {e}")
-    
-    def check_card_reliability(self, card_id):
-        """Check if a card should be monitored based on reliability score"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT reliability_score, blacklisted, fake_alert_count, valid_alert_count
-                FROM card_reliability WHERE card_id = ?
-            ''', (card_id,))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if not row:
-                return {"monitor": True, "score": 100.0, "reason": "new_card"}
-            
-            score, blacklisted, fake_count, valid_count = row
-            
-            if blacklisted:
-                return {"monitor": False, "score": score, "reason": "blacklisted"}
-            
-            if score < 30 and (fake_count + valid_count) >= 5:
-                return {"monitor": False, "score": score, "reason": "low_reliability"}
-            
-            return {"monitor": True, "score": score, "reason": "reliable"}
-            
-        except Exception as e:
-            print(f"Error checking card reliability: {e}")
-            return {"monitor": True, "score": 100.0, "reason": "check_error"}
-        """
-        Analyze price gap between first and second lowest prices with comprehensive intelligent validation
-        Calculate actual trading profit after EA tax and filter out invalid/suspicious data
-        """
+    def analyze_price_gap(self, prices_list, card_id=None):
+        """Analyze price gap between first and second lowest prices"""
         if len(prices_list) < 2:
-            print("❌ VALIDATION FAILED: Need at least 2 prices for comparison")
             return None
         
         # Sort to ensure we have lowest prices first
@@ -936,114 +526,13 @@ class FutbinPriceMonitor:
         buy_price = sorted_prices[0]  # First (lowest) price - what we buy for
         sell_price = sorted_prices[1]  # Second price - what we sell for
         
-        # COMPREHENSIVE PRICE VALIDATION
-        
-        # 1. Check for zero or negative prices (critical validation)
-        if buy_price <= 0:
-            print(f"❌ INVALID BUY PRICE: {buy_price} (must be positive)")
-            return None
-            
-        if sell_price <= 0:
-            print(f"❌ INVALID SELL PRICE: {sell_price} (must be positive)")
+        # Basic validation
+        if buy_price <= 0 or sell_price <= 0 or sell_price <= buy_price:
             return None
         
-        # 2. Check for minimum viable prices
-        if buy_price < Config.MINIMUM_CARD_PRICE:
-            print(f"❌ BUY PRICE TOO LOW: {buy_price:,} < {Config.MINIMUM_CARD_PRICE:,}")
+        min_card_price = getattr(Config, 'MINIMUM_CARD_PRICE', 1000)
+        if buy_price < min_card_price:
             return None
-        
-        # 3. Logical price validation - sell price must be higher than buy price
-        if sell_price <= buy_price:
-            print(f"❌ ILLOGICAL PRICES: sell ({sell_price:,}) <= buy ({buy_price:,})")
-            return None
-        
-        # 4. Check for unrealistically low prices (potential data errors)
-        if buy_price < 500:  # Cards under 500 coins are likely data errors
-            print(f"❌ UNREALISTIC LOW PRICE: {buy_price} coins (likely scraping error)")
-            return None
-        
-        # 5. Check for identical prices (no actual gap)
-        if buy_price == sell_price:
-            print(f"❌ NO PRICE GAP: Both prices are {buy_price:,}")
-            return None
-        
-        # INTELLIGENT FAKE PRICE DETECTION
-        
-        # 6. Detect suspiciously large gaps on expensive cards
-        price_ratio = sell_price / buy_price
-        if buy_price >= 500000:  # Cards over 500k coins
-            if price_ratio > 2.0:  # More than 100% difference
-                print(f"⚠️ FAKE PRICE DETECTED: {buy_price:,} vs {sell_price:,} (ratio: {price_ratio:.1f}x) - skipping")
-                return None
-        
-        # 7. Ultra-expensive cards (1M+) need even stricter filtering
-        if buy_price >= 1000000:  # Cards over 1M coins
-            if price_ratio > 1.3:  # More than 30% difference is suspicious
-                print(f"⚠️ HIGH-VALUE FAKE PRICE: {buy_price:,} vs {sell_price:,} (ratio: {price_ratio:.1f}x) - skipping")
-                return None
-        
-        # 8. Check for round number manipulation (common fake price tactic)
-        if buy_price >= 100000:  # Only for expensive cards
-            buy_str = str(buy_price)
-            trailing_zeros = len(buy_str) - len(buy_str.rstrip('0'))
-            
-            # If price ends in 4+ zeros and gap is large, likely fake
-            if trailing_zeros >= 4:
-                price_gap_percentage = ((sell_price - buy_price) / buy_price) * 100
-                if price_gap_percentage > 15:
-                    print(f"⚠️ ROUND NUMBER FAKE: {buy_price:,} (ends in {trailing_zeros} zeros) vs {sell_price:,} - skipping")
-                    return None
-        
-        # 9. Detect extreme percentage gaps that are unrealistic
-        raw_profit = sell_price - buy_price
-        raw_percentage = (raw_profit / buy_price) * 100
-        
-        # Progressive thresholds based on card value
-        if buy_price >= 2000000 and raw_percentage > 25:  # 2M+ cards: max 25% gap
-            print(f"⚠️ UNREALISTIC PROFIT on 2M+ card: {raw_percentage:.1f}% - likely fake")
-            return None
-        elif buy_price >= 1000000 and raw_percentage > 40:  # 1M+ cards: max 40% gap
-            print(f"⚠️ UNREALISTIC PROFIT on 1M+ card: {raw_percentage:.1f}% - likely fake")
-            return None
-        elif buy_price >= 500000 and raw_percentage > 60:  # 500k+ cards: max 60% gap
-            print(f"⚠️ UNREALISTIC PROFIT on 500k+ card: {raw_percentage:.1f}% - likely fake")
-            return None
-        elif buy_price >= 100000 and raw_percentage > 100:  # 100k+ cards: max 100% gap
-            print(f"⚠️ UNREALISTIC PROFIT on 100k+ card: {raw_percentage:.1f}% - likely fake")
-            return None
-        
-        # 10. Multiple price validation - check if we have more prices to validate
-        if len(sorted_prices) >= 3:
-            third_price = sorted_prices[2]
-            
-            # Validate third price is also positive
-            if third_price <= 0:
-                print(f"❌ INVALID THIRD PRICE: {third_price}")
-                return None
-            
-            # If first price is much lower than both second AND third, likely fake
-            second_ratio = sell_price / buy_price
-            third_ratio = third_price / buy_price
-            
-            if buy_price >= 200000 and second_ratio > 1.5 and third_ratio > 1.5:
-                print(f"⚠️ ISOLATED LOW PRICE: {buy_price:,} vs {sell_price:,} & {third_price:,} - likely fake listing")
-                return None
-        
-        # 11. Check for data consistency across all available prices
-        if len(sorted_prices) >= 4:
-            # If we have 4+ prices, ensure they follow a logical progression
-            for i in range(len(sorted_prices) - 1):
-                current_price = sorted_prices[i]
-                next_price = sorted_prices[i + 1]
-                
-                if current_price <= 0 or next_price <= 0:
-                    print(f"❌ INVALID PRICE IN SEQUENCE: {current_price} or {next_price}")
-                    return None
-                
-                # Prices should not jump by more than 300% between consecutive entries
-                if next_price / current_price > 4.0:
-                    print(f"⚠️ SUSPICIOUS PRICE JUMP: {current_price:,} → {next_price:,} (ratio: {next_price/current_price:.1f}x)")
-                    return None
         
         # Calculate EA tax (5% on all sales)
         ea_tax = sell_price * 0.05
@@ -1052,69 +541,16 @@ class FutbinPriceMonitor:
         # Calculate actual profit
         profit_after_tax = sell_price_after_tax - buy_price
         
-        # 12. Validate EA tax calculation makes sense
-        if ea_tax <= 0:
-            print(f"❌ INVALID EA TAX CALCULATION: {ea_tax}")
-            return None
-        
-        # 13. Only alert if there's actual meaningful profit after tax
-        if profit_after_tax < Config.MINIMUM_PRICE_GAP_COINS:
-            print(f"❌ PROFIT TOO LOW: {profit_after_tax:,} < {Config.MINIMUM_PRICE_GAP_COINS:,} after tax")
+        # Only alert if there's actual meaningful profit after tax
+        min_gap_coins = getattr(Config, 'MINIMUM_PRICE_GAP_COINS', 5000)
+        if profit_after_tax < min_gap_coins:
             return None
         
         # Calculate percentage profit (based on buy price)
         percentage_profit = (profit_after_tax / buy_price) * 100
         
-        if percentage_profit < Config.MINIMUM_PRICE_GAP_PERCENTAGE:
-            print(f"❌ PERCENTAGE TOO LOW: {percentage_profit:.1f}% < {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%")
-            return None
-        
-        # 14. Final sanity check on all calculated values
-        if sell_price_after_tax <= 0 or profit_after_tax <= 0 or percentage_profit <= 0:
-            print(f"❌ INVALID CALCULATIONS: after_tax={sell_price_after_tax:,}, profit={profit_after_tax:,}, percentage={percentage_profit:.1f}%")
-            return None
-        
-        # Final validation: Log legitimate opportunities for expensive cards
-        if buy_price >= 500000:
-            print(f"✅ LEGITIMATE OPPORTUNITY: {buy_price:,} → {sell_price:,} (profit: {profit_after_tax:,}, {percentage_profit:.1f}%)")
-        
-        return {
-            'buy_price': buy_price,
-            'sell_price': sell_price,
-            'sell_price_after_tax': int(sell_price_after_tax),
-            'raw_profit': raw_profit,
-            'profit_after_tax': int(profit_after_tax),
-            'percentage_profit': percentage_profit,
-            'ea_tax': int(ea_tax)
-        }
-
-    def simple_price_gap_analysis(self, prices_list):
-        """Simple fallback price gap analysis without intelligence features"""
-        if len(prices_list) < 2:
-            return None
-        
-        sorted_prices = sorted(prices_list)
-        buy_price = sorted_prices[0]
-        sell_price = sorted_prices[1]
-        
-        # Basic validation
-        if buy_price <= 0 or sell_price <= 0 or sell_price <= buy_price:
-            return None
-        
-        if buy_price < Config.MINIMUM_CARD_PRICE:
-            return None
-        
-        # Calculate EA tax and profit
-        ea_tax = sell_price * 0.05
-        sell_price_after_tax = sell_price - ea_tax
-        profit_after_tax = sell_price_after_tax - buy_price
-        
-        if profit_after_tax < Config.MINIMUM_PRICE_GAP_COINS:
-            return None
-        
-        percentage_profit = (profit_after_tax / buy_price) * 100
-        
-        if percentage_profit < Config.MINIMUM_PRICE_GAP_PERCENTAGE:
+        min_gap_percentage = getattr(Config, 'MINIMUM_PRICE_GAP_PERCENTAGE', 10)
+        if percentage_profit < min_gap_percentage:
             return None
         
         return {
@@ -1178,6 +614,122 @@ class FutbinPriceMonitor:
         # Send to Discord
         self.send_discord_general_notification(message, title)
     
+    def get_player_image_from_url(self, futbin_url):
+        """Extract the og:image from Futbin page - same image Telegram shows"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(futbin_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Look for og:image meta tag (this is what Telegram uses)
+                og_image = soup.find('meta', property='og:image')
+                if og_image and og_image.get('content'):
+                    return og_image['content']
+                
+                # Fallback: look for player image in the page
+                player_img = soup.find('img', {'class': 'player-img'}) or \
+                           soup.find('img', {'id': 'player-img'}) or \
+                           soup.find('img', src=lambda x: x and 'players' in x)
+                
+                if player_img and player_img.get('src'):
+                    img_src = player_img['src']
+                    # Convert relative URL to absolute
+                    if img_src.startswith('//'):
+                        return f"https:{img_src}"
+                    elif img_src.startswith('/'):
+                        return f"https://www.futbin.com{img_src}"
+                    else:
+                        return img_src
+                        
+        except Exception as e:
+            print(f"❌ Error extracting player image: {e}")
+        
+        return None
+    
+    def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
+        """Send Discord notification with proper player name and same image as Telegram"""
+        if not Config.DISCORD_WEBHOOK_URL:
+            return  # Discord not configured
+        
+        # Color based on profit margin
+        if profit_margin >= 30:
+            color = 0xff4500  # Red-orange
+        elif profit_margin >= 20:
+            color = 0x00ff00  # Green
+        elif profit_margin >= 10:
+            color = 0xffa500  # Orange
+        else:
+            color = 0x0099ff  # Blue
+        
+        # Get the same player image that Telegram shows
+        thumbnail_url = None
+        if 'futbin_url' in card_info and card_info['futbin_url']:
+            thumbnail_url = self.get_player_image_from_url(card_info['futbin_url'])
+            
+            # Fallback to direct CDN URL if og:image extraction fails
+            if not thumbnail_url:
+                url_parts = card_info['futbin_url'].split('/')
+                if len(url_parts) >= 6:
+                    try:
+                        futbin_id = url_parts[5]
+                        thumbnail_url = f"https://cdn3.futbin.com/content/fifa26/img/players/{futbin_id}.png?fm=png&ixlib=java-2.1.0&w=324&s=09330e054dcaf6ca1595f92fee17894a"
+                    except:
+                        pass
+        
+        # Title exactly like the image
+        title = "FutBin Error Found 🔍"
+        
+        # Make sure we're using the actual player NAME, not the rating
+        player_name = card_info.get('name', 'Unknown Player')
+        
+        # Description with exact format from image - using PLAYER NAME not rating
+        description = f"""**Player**
+{player_name}
+**Platform**
+{platform.title()}
+**Market Price**
+{gap_info['sell_price']:,}
+**Buy Price**
+{gap_info['buy_price']:,}
+**Profit (Untaxed)**
+{gap_info['raw_profit']:,}
+**Profit (-5%)**
+{gap_info['profit_after_tax']:,}
+**Link**
+[FutBin]({card_info['futbin_url']})"""
+        
+        # Clean embed that matches the format
+        embed = {
+            "title": title,
+            "description": description,
+            "color": color,
+            "url": card_info['futbin_url']
+        }
+        
+        # Add the same player image that Telegram shows
+        if thumbnail_url:
+            embed["thumbnail"] = {"url": thumbnail_url}
+            print(f"🖼️ Using player image: {thumbnail_url}")
+        else:
+            print("⚠️ No player image found")
+        
+        payload = {
+            "embeds": [embed]
+        }
+        
+        try:
+            response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
+            if response.status_code == 204:
+                print(f"✅ Discord notification sent for {player_name}")
+            else:
+                print(f"❌ Discord error: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Discord error: {e}")
+    
     def send_price_alert(self, card_info, platform, gap_info):
         """Send price gap alert with proper trading calculations"""
         
@@ -1235,179 +787,6 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         self.send_discord_notification(card_info, platform, gap_info, profit_margin, profit_quality)
         
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
-        
-    def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
-        """Send Discord notification with proper player name and same image as Telegram"""
-        if not Config.DISCORD_WEBHOOK_URL:
-            return  # Discord not configured
-        
-        # Color based on profit margin
-        if profit_margin >= 30:
-            color = 0xff4500  # Red-orange
-        elif profit_margin >= 20:
-            color = 0x00ff00  # Green
-        elif profit_margin >= 10:
-            color = 0xffa500  # Orange
-        else:
-            color = 0x0099ff  # Blue
-        
-        # Extract player image from Futbin page (same image that shows in Telegram)
-    def get_player_image_from_url(self, futbin_url):
-        """Extract the og:image from Futbin page - same image Telegram shows"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = requests.get(futbin_url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Look for og:image meta tag (this is what Telegram uses)
-                og_image = soup.find('meta', property='og:image')
-                if og_image and og_image.get('content'):
-                    return og_image['content']
-                
-                # Fallback: look for player image in the page
-                player_img = soup.find('img', {'class': 'player-img'}) or \
-                           soup.find('img', {'id': 'player-img'}) or \
-                           soup.find('img', src=lambda x: x and 'players' in x)
-                
-                if player_img and player_img.get('src'):
-                    img_src = player_img['src']
-                    # Convert relative URL to absolute
-                    if img_src.startswith('//'):
-                        return f"https:{img_src}"
-                    elif img_src.startswith('/'):
-                        return f"https://www.futbin.com{img_src}"
-                    else:
-                        return img_src
-                        
-        except Exception as e:
-            print(f"❌ Error extracting player image: {e}")
-        
-        return None
-    
-    # Get the same player image that Telegram shows
-    thumbnail_url = None
-    if 'futbin_url' in card_info and card_info['futbin_url']:
-        thumbnail_url = get_player_image_from_url(self, card_info['futbin_url'])
-        
-        # Fallback to direct CDN URL if og:image extraction fails
-        if not thumbnail_url:
-            url_parts = card_info['futbin_url'].split('/')
-            if len(url_parts) >= 6:
-                try:
-                    futbin_id = url_parts[5]
-                    thumbnail_url = f"https://cdn3.futbin.com/content/fifa26/img/players/{futbin_id}.png?fm=png&ixlib=java-2.1.0&w=324&s=09330e054dcaf6ca1595f92fee17894a"
-                except:
-                    pass
-    
-    # Title exactly like the image
-    title = "FutBin Error Found 🔍"
-    
-    # Make sure we're using the actual player NAME, not the rating
-    player_name = card_info.get('name', 'Unknown Player')
-    
-    # Description with exact format from image - using PLAYER NAME not rating
-    description = f"""**Player**
-{player_name}
-**Platform**
-{platform.title()}
-**Market Price**
-{gap_info['sell_price']:,}
-**Buy Price**
-{gap_info['buy_price']:,}
-**Profit (Untaxed)**
-{gap_info['raw_profit']:,}
-**Profit (-5%)**
-{gap_info['profit_after_tax']:,}
-**Link**
-[FutBin]({card_info['futbin_url']})"""
-    
-    # Clean embed that matches the format
-    embed = {
-        "title": title,
-        "description": description,
-        "color": color,
-        "url": card_info['futbin_url']
-    }
-    
-    # Add the same player image that Telegram shows
-    if thumbnail_url:
-        embed["thumbnail"] = {"url": thumbnail_url}
-        print(f"🖼️ Using player image: {thumbnail_url}")
-    else:
-        print("⚠️ No player image found")
-    
-    payload = {
-        "embeds": [embed]
-    }
-    
-    try:
-        response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
-        if response.status_code == 204:
-            print(f"✅ Discord notification sent for {player_name}")
-        else:
-            print(f"❌ Discord error: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Discord error: {e}")
-
-
-# Alternative simpler method - Cache the og:image during initial scraping
-def scrape_card_data_with_image(self, card_element, futbin_url):
-    """Extract card information and cache the og:image"""
-    try:
-        card_info = {}
-        
-        # Get the player NAME (not rating)
-        name_element = card_element.find('span', class_='player_name')
-        if name_element:
-            card_info['name'] = name_element.get_text().strip()
-        else:
-            # Fallback selectors
-            name_alt = card_element.find('a', {'class': 'player-name'}) or \
-                      card_element.find('div', {'class': 'player-name'}) or \
-                      card_element.find('[data-player-name]')
-            if name_alt:
-                card_info['name'] = name_alt.get_text().strip()
-            else:
-                card_info['name'] = 'Unknown Player'
-        
-        # Get rating separately
-        rating_element = card_element.find('span', class_='rating')
-        if rating_element:
-            card_info['rating'] = rating_element.get_text().strip()
-        
-        # Get position
-        position_element = card_element.find('span', class_='position')
-        if position_element:
-            card_info['position'] = position_element.get_text().strip()
-        else:
-            card_info['position'] = ''
-        
-        # Store the URL
-        card_info['futbin_url'] = futbin_url
-        
-        # Extract og:image immediately while we're already on the page
-        try:
-            from bs4 import BeautifulSoup
-            page_content = requests.get(futbin_url).content
-            soup = BeautifulSoup(page_content, 'html.parser')
-            
-            og_image = soup.find('meta', property='og:image')
-            if og_image and og_image.get('content'):
-                card_info['player_image'] = og_image['content']
-                print(f"🖼️ Cached player image for {card_info['name']}")
-        except:
-            card_info['player_image'] = None
-        
-        return card_info
-        
-    except Exception as e:
-        print(f"❌ Error extracting card data: {e}")
-        return None
     
     def save_price_alert(self, card_id, platform, gap_info):
         """Save price alert to database and prevent duplicates"""
@@ -1415,7 +794,8 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         cursor = conn.cursor()
         
         # Check if we already sent an alert for this card/platform recently
-        cooldown_time = datetime.now() - timedelta(minutes=Config.ALERT_COOLDOWN_MINUTES)
+        cooldown_minutes = getattr(Config, 'ALERT_COOLDOWN_MINUTES', 30)
+        cooldown_time = datetime.now() - timedelta(minutes=cooldown_minutes)
         cursor.execute('''
             SELECT COUNT(*) FROM price_alerts 
             WHERE card_id = ? AND platform = ? AND alert_sent_at > ?
@@ -1424,7 +804,7 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         recent_alerts = cursor.fetchone()[0]
         
         if recent_alerts > 0:
-            print(f"⚠️ Alert already sent for card {card_id} ({platform}) in the last {Config.ALERT_COOLDOWN_MINUTES} minutes, skipping...")
+            print(f"⚠️ Alert already sent for card {card_id} ({platform}) in the last {cooldown_minutes} minutes, skipping...")
             conn.close()
             return False
         
@@ -1443,7 +823,7 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         conn.close()
         return True
     
-    def get_cards_to_monitor(self, limit=200):
+    def get_cards_to_monitor(self, limit=100):
         """Get cards from database to monitor for price gaps - focuses on viable trading cards"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1451,8 +831,8 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         # Get a balanced mix of cards across viable rating ranges
         cards = []
         
-        # 1. High-rated cards (85+) - 25% of monitoring
-        high_rated_limit = int(limit * 0.25)
+        # 1. High-rated cards (85+) - 20% of monitoring
+        high_rated_limit = int(limit * 0.20)
         cursor.execute('''
             SELECT id, name, rating, position, club, nation, league, futbin_url
             FROM cards 
@@ -1467,8 +847,8 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
                 'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
             })
         
-        # 2. Mid-rated cards (75-84) - 60% of monitoring (increased)
-        mid_rated_limit = int(limit * 0.60)
+        # 2. Mid-rated cards (75-84) - 50% of monitoring
+        mid_rated_limit = int(limit * 0.50)
         cursor.execute('''
             SELECT id, name, rating, position, club, nation, league, futbin_url
             FROM cards 
@@ -1483,8 +863,8 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
                 'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
             })
         
-        # 3. Budget cards (65-74) - 15% of monitoring  
-        budget_limit = int(limit * 0.15)
+        # 3. Budget cards (65-74) - 25% of monitoring  
+        budget_limit = int(limit * 0.25)
         cursor.execute('''
             SELECT id, name, rating, position, club, nation, league, futbin_url
             FROM cards 
@@ -1499,13 +879,28 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
                 'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
             })
         
+        # 4. Special consideration for very high-rated cards (90+) - 5% of monitoring
+        special_limit = int(limit * 0.05)
+        cursor.execute('''
+            SELECT id, name, rating, position, club, nation, league, futbin_url
+            FROM cards 
+            WHERE rating >= 90
+            ORDER BY rating DESC, RANDOM()
+            LIMIT ?
+        ''', (special_limit,))
+        
+        for row in cursor.fetchall():
+            cards.append({
+                'id': row[0], 'name': row[1], 'rating': row[2], 'position': row[3],
+                'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
+            })
+        
         conn.close()
         
         # Shuffle the final list to mix different rating ranges
-        import random
         random.shuffle(cards)
         
-        print(f"📊 Monitoring mix: {high_rated_limit} high-rated (85+), {mid_rated_limit} mid-rated (75-84), {budget_limit} budget (65-74) cards")
+        print(f"📊 Monitoring mix: {high_rated_limit} high-rated (85+), {mid_rated_limit} mid-rated (75-84), {budget_limit} budget (65-74), {special_limit} elite (90+) cards")
         
         return cards
     
@@ -1515,7 +910,7 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         
         while True:
             try:
-                cards = self.get_cards_to_monitor(100)  # Back to 100 cards per cycle
+                cards = self.get_cards_to_monitor(100)  # Monitor 100 cards per cycle
                 if not cards:
                     print("❌ No cards in database! This shouldn't happen after scraping.")
                     # If database is empty, do a quick re-scrape
@@ -1534,22 +929,17 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
                         if prices:
                             for platform, price_list in prices.items():
                                 if len(price_list) >= 2:
-                                    # Use simple price gap analysis if advanced method fails
-                                    try:
-                                        gap_info = self.analyze_price_gap(price_list, card['id'])
-                                    except Exception as e:
-                                        print(f"Error in advanced analysis, using simple analysis: {e}")
-                                        gap_info = self.simple_price_gap_analysis(price_list)
+                                    gap_info = self.analyze_price_gap(price_list, card['id'])
                                     
                                     if gap_info:
                                         self.send_price_alert(card, platform, gap_info)
                                         alerts_sent += 1
                         
-                        # Progress update every 25 cards (original frequency)
+                        # Progress update every 25 cards
                         if (i + 1) % 25 == 0:
                             print(f"✅ Checked {i + 1}/{len(cards)} cards... Alerts sent: {alerts_sent}")
                         
-                        # IMPORTANT: Original delay range (4-8 seconds) for price monitoring
+                        # IMPORTANT: Delay range (4-8 seconds) for price monitoring
                         time.sleep(random.uniform(4, 8))
                         
                     except Exception as e:
@@ -1557,19 +947,20 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
                         continue
                 
                 # Send cycle completion notification
-                if Config.SEND_CYCLE_SUMMARIES and alerts_sent > 0:
+                send_summaries = getattr(Config, 'SEND_CYCLE_SUMMARIES', False)
+                if send_summaries and alerts_sent > 0:
                     self.send_notification_to_all(
                         f"📊 Monitoring cycle complete!\n"
                         f"🔍 Checked {len(cards)} cards\n"
                         f"🚨 Sent {alerts_sent} trading alerts\n"
-                        f"⏰ Next check in {Config.MONITORING_CYCLE_INTERVAL} minutes",
+                        f"⏰ Next check in 45 minutes",
                         "📊 Cycle Complete"
                     )
                 else:
                     print(f"📊 Cycle complete - no trading opportunities found this round")
                 
                 print(f"💤 Cycle complete. Sent {alerts_sent} alerts. Waiting 45 minutes for next check...")
-                time.sleep(2700)  # Back to 45 minutes (original timing)
+                time.sleep(2700)  # 45 minutes
                 
             except KeyboardInterrupt:
                 print("🛑 Monitoring stopped!")
@@ -1596,7 +987,8 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         print(f"📊 Current cards in database: {card_count}")
         
         # Check if scraping should be skipped
-        if Config.SKIP_SCRAPING:
+        skip_scraping = getattr(Config, 'SKIP_SCRAPING', False)
+        if skip_scraping:
             print("⚠️ SKIP_SCRAPING enabled - bypassing scraping phase")
             if card_count == 0:
                 print("❌ WARNING: Database is empty but scraping is disabled!")
@@ -1614,7 +1006,8 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
                 )
         elif card_count == 0:
             print("🚀 Database is empty - starting fresh scraping session")
-            print(f"📄 Will scrape {Config.PAGES_TO_SCRAPE} pages for quick startup")
+            pages_to_scrape = getattr(Config, 'PAGES_TO_SCRAPE', 50)
+            print(f"📄 Will scrape {pages_to_scrape} pages for quick startup")
             
             self.scrape_all_cards()
         elif card_count < 1000:
@@ -1637,8 +1030,18 @@ def scrape_card_data_with_image(self, card_element, futbin_url):
         print("🎯 Starting price monitoring for trading opportunities...")
         self.run_price_monitoring()
 
+
 # Entry point for running the monitor
 if __name__ == "__main__":
-    # Run the complete system
-    monitor = FutbinPriceMonitor()
-    monitor.run_complete_system()
+    try:
+        print("🚀 Initializing Futbin Price Monitor...")
+        # Run the complete system
+        monitor = FutbinPriceMonitor()
+        monitor.run_complete_system()
+    except KeyboardInterrupt:
+        print("\n🛑 Monitor stopped by user")
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        
