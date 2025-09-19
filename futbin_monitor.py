@@ -573,7 +573,7 @@ class FutbinPriceMonitor:
     def analyze_price_gap(self, prices_list):
         """
         Analyze price gap between first and second lowest prices
-        Calculate actual trading profit after EA tax
+        Calculate actual trading profit after EA tax with intelligent fake price detection
         """
         if len(prices_list) < 2:
             return None
@@ -586,12 +586,67 @@ class FutbinPriceMonitor:
         if buy_price < Config.MINIMUM_CARD_PRICE:
             return None
         
+        # INTELLIGENT FAKE PRICE DETECTION
+        
+        # 1. Detect suspiciously large gaps on expensive cards
+        if buy_price >= 500000:  # Cards over 500k coins
+            price_ratio = sell_price / buy_price
+            if price_ratio > 2.0:  # More than 100% difference
+                print(f"⚠️ FAKE PRICE DETECTED: {buy_price:,} vs {sell_price:,} (ratio: {price_ratio:.1f}x) - skipping")
+                return None
+        
+        # 2. Ultra-expensive cards (1M+) need even stricter filtering
+        if buy_price >= 1000000:  # Cards over 1M coins
+            price_ratio = sell_price / buy_price
+            if price_ratio > 1.3:  # More than 30% difference is suspicious
+                print(f"⚠️ HIGH-VALUE FAKE PRICE: {buy_price:,} vs {sell_price:,} (ratio: {price_ratio:.1f}x) - skipping")
+                return None
+        
+        # 3. Check for round number manipulation (common fake price tactic)
+        if buy_price >= 100000:  # Only for expensive cards
+            # Detect if buy_price is suspiciously round (ends in many zeros)
+            buy_str = str(buy_price)
+            trailing_zeros = len(buy_str) - len(buy_str.rstrip('0'))
+            
+            # If price ends in 4+ zeros and gap is large, likely fake
+            if trailing_zeros >= 4:
+                price_gap_percentage = ((sell_price - buy_price) / buy_price) * 100
+                if price_gap_percentage > 15:
+                    print(f"⚠️ ROUND NUMBER FAKE: {buy_price:,} (ends in {trailing_zeros} zeros) vs {sell_price:,} - skipping")
+                    return None
+        
+        # 4. Detect extreme percentage gaps that are unrealistic
+        raw_profit = sell_price - buy_price
+        raw_percentage = (raw_profit / buy_price) * 100
+        
+        # Progressive thresholds based on card value
+        if buy_price >= 2000000 and raw_percentage > 25:  # 2M+ cards: max 25% gap
+            print(f"⚠️ UNREALISTIC PROFIT on 2M+ card: {raw_percentage:.1f}% - likely fake")
+            return None
+        elif buy_price >= 1000000 and raw_percentage > 40:  # 1M+ cards: max 40% gap
+            print(f"⚠️ UNREALISTIC PROFIT on 1M+ card: {raw_percentage:.1f}% - likely fake")
+            return None
+        elif buy_price >= 500000 and raw_percentage > 60:  # 500k+ cards: max 60% gap
+            print(f"⚠️ UNREALISTIC PROFIT on 500k+ card: {raw_percentage:.1f}% - likely fake")
+            return None
+        
+        # 5. Multiple price validation - check if we have more prices to validate
+        if len(sorted_prices) >= 3:
+            third_price = sorted_prices[2]
+            
+            # If first price is much lower than both second AND third, likely fake
+            second_ratio = sell_price / buy_price
+            third_ratio = third_price / buy_price
+            
+            if buy_price >= 200000 and second_ratio > 1.5 and third_ratio > 1.5:
+                print(f"⚠️ ISOLATED LOW PRICE: {buy_price:,} vs {sell_price:,} & {third_price:,} - likely fake listing")
+                return None
+        
         # Calculate EA tax (5% on all sales)
         ea_tax = sell_price * 0.05
         sell_price_after_tax = sell_price - ea_tax
         
         # Calculate actual profit
-        raw_profit = sell_price - buy_price
         profit_after_tax = sell_price_after_tax - buy_price
         
         # Only alert if there's actual profit after tax
@@ -603,6 +658,10 @@ class FutbinPriceMonitor:
         
         if percentage_profit < Config.MINIMUM_PRICE_GAP_PERCENTAGE:
             return None
+        
+        # Final validation: Log legitimate opportunities for expensive cards
+        if buy_price >= 500000:
+            print(f"✅ LEGITIMATE OPPORTUNITY: {buy_price:,} → {sell_price:,} (profit: {profit_after_tax:,}, {percentage_profit:.1f}%)")
         
         return {
             'buy_price': buy_price,
