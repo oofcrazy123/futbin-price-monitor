@@ -448,6 +448,25 @@ class FutbinPriceMonitor:
         
         for page in range(1, Config.PAGES_TO_SCRAPE + 1):
             try:
+                # CHECK FOR DATABASE UPLOAD BEFORE EACH PAGE
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM cards')
+                current_card_count = cursor.fetchone()[0]
+                conn.close()
+                
+                # If database suddenly has many cards, someone uploaded a database
+                if current_card_count > total_saved + 100:  # Significant jump indicates upload
+                    print(f"🔄 DATABASE UPLOAD DETECTED! Found {current_card_count:,} cards (was {total_saved})")
+                    self.send_notification_to_all(
+                        f"🔄 Database upload detected during scraping!\n"
+                        f"📊 Found {current_card_count:,} cards in database\n"
+                        f"⏹️ Stopping scraping and switching to monitoring\n"
+                        f"✅ No need to continue scraping!",
+                        "🔄 Database Upload Detected"
+                    )
+                    return current_card_count
+                
                 print(f"📄 Scraping page {page}/{Config.PAGES_TO_SCRAPE}...")
                 
                 cards = self.scrape_futbin_cards_list(page)
