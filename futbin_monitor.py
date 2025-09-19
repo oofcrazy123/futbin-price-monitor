@@ -1237,161 +1237,60 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
         
     def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
-        """Send enhanced Discord webhook notification with actual player image"""
-        if not Config.DISCORD_WEBHOOK_URL:
-            return  # Discord not configured
-        
-        # Enhanced profit quality system with more tiers
-        if profit_margin >= 50:
-            profit_emoji = "💎"
-            profit_quality = "DIAMOND"
-            color = 0x9932cc  # Purple
-        elif profit_margin >= 30:
-            profit_emoji = "🔥"
-            profit_quality = "FIRE"
-            color = 0xff4500  # Red-orange
-        elif profit_margin >= 20:
-            profit_emoji = "🚀"
-            profit_quality = "ROCKET"
-            color = 0x00ff00  # Green
-        elif profit_margin >= 10:
-            profit_emoji = "⭐"
-            profit_quality = "STAR"
-            color = 0xffa500  # Orange
+    """Send Discord notification matching the exact format shown"""
+    if not Config.DISCORD_WEBHOOK_URL:
+        return  # Discord not configured
+    
+    # Simple color based on profit margin
+    if profit_margin >= 30:
+        color = 0xff4500  # Red-orange
+    elif profit_margin >= 20:
+        color = 0x00ff00  # Green
+    elif profit_margin >= 10:
+        color = 0xffa500  # Orange
+    else:
+        color = 0x0099ff  # Blue
+    
+    # Title exactly like Image 2
+    title = "FutBin Error Found 🔍"
+    
+    # Description with exact format from Image 2
+    description = f"""**Player**
+{card_info['name']}
+**Platform**
+{platform.title()}
+**Market Price**
+{gap_info['sell_price']:,}
+**Buy Price**
+{gap_info['buy_price']:,}
+**Profit (Untaxed)**
+{gap_info['raw_profit']:,}
+**Profit (-5%)**
+{gap_info['profit_after_tax']:,}
+**Link**
+[FutBin]({card_info['futbin_url']})"""
+    
+    # Simple embed that matches Image 2 format
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "url": card_info['futbin_url'],
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    payload = {
+        "embeds": [embed]
+    }
+    
+    try:
+        response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code == 204:
+            print("✅ FutBin format Discord notification sent")
         else:
-            profit_emoji = "💡"
-            profit_quality = "DECENT"
-            color = 0x0099ff  # Blue
-        
-        # Create engaging title with player rating context
-        rating_context = ""
-        if card_info['rating'] >= 90:
-            rating_context = "🌟 ELITE"
-        elif card_info['rating'] >= 85:
-            rating_context = "⚡ HIGH-RATED"
-        elif card_info['rating'] >= 80:
-            rating_context = "✨ SOLID"
-        
-        title = f"{profit_emoji} {rating_context} {card_info['name']} - {profit_quality}"
-        
-        # Enhanced description with more context
-        club_info = f"🏟️ {card_info.get('club', 'Unknown')}" if card_info.get('club') else ""
-        nation_info = f"🌍 {card_info.get('nation', 'Unknown')}" if card_info.get('nation') else ""
-        
-        description_parts = [
-            f"**Rating {card_info['rating']} {card_info['position']} on {platform.upper()}**",
-        ]
-        
-        if club_info or nation_info:
-            description_parts.append(f"{club_info} {nation_info}".strip())
-        
-        # Add profit urgency indicator
-        if profit_margin >= 30:
-            description_parts.append("🚨 **HIGH PROFIT OPPORTUNITY**")
-        elif profit_margin >= 15:
-            description_parts.append("⚡ **GOOD PROFIT POTENTIAL**")
-        
-        # Enhanced fields with better formatting and progress bars
-        fields = []
-        
-        # Buy/Sell prices with visual comparison
-        price_ratio = gap_info['sell_price'] / gap_info['buy_price']
-        fields.append({
-            "name": "💰 Buy Price",
-            "value": f"**{gap_info['buy_price']:,}**\n`Lowest BIN`",
-            "inline": True
-        })
-        
-        fields.append({
-            "name": "🏷️ Sell Price", 
-            "value": f"**{gap_info['sell_price']:,}**\n`2nd Lowest (+{price_ratio-1:.1%})`",
-            "inline": True
-        })
-        
-        fields.append({
-            "name": f"{profit_emoji} Net Profit",
-            "value": f"**{gap_info['profit_after_tax']:,}**\n`{profit_margin:.1f}% ROI`",
-            "inline": True
-        })
-        
-        # Add a quick math breakdown
-        fields.append({
-            "name": "📊 Breakdown",
-            "value": f"Gross: {gap_info['raw_profit']:,}\nEA Tax: -{gap_info['ea_tax']:,}\n**Net: {gap_info['profit_after_tax']:,}**",
-            "inline": True
-        })
-        
-        # Add timing context
-        current_time = datetime.now()
-        time_str = current_time.strftime("%H:%M")
-        fields.append({
-            "name": "⏰ Spotted At",
-            "value": f"**{time_str}**\n`Act quickly!`",
-            "inline": True
-        })
-        
-        # Add card value context
-        if gap_info['buy_price'] >= 1000000:
-            value_tier = "🏆 PREMIUM"
-        elif gap_info['buy_price'] >= 500000:
-            value_tier = "💎 EXPENSIVE"
-        elif gap_info['buy_price'] >= 100000:
-            value_tier = "💰 VALUABLE"
-        else:
-            value_tier = "🪙 BUDGET"
-            
-        fields.append({
-            "name": "📈 Card Tier",
-            "value": f"**{value_tier}**\n`{gap_info['buy_price']:,} range`",
-            "inline": True
-        })
-        
-        # Extract player image URL from futbin_id
-        player_image_url = None
-        if card_info.get('futbin_id'):
-            # Construct the direct image URL using the futbin_id
-            player_image_url = f"https://cdn3.futbin.com/content/fifa26/img/players/{card_info['futbin_id']}.png?fm=png&ixlib=java-2.1.0&w=324&s=09330e054dcaf6ca1595f92fee17894a"
-        
-        # Create the enhanced embed
-        embed = {
-            "title": title,
-            "description": "\n".join(description_parts),
-            "color": color,
-            "fields": fields,
-            "url": card_info['futbin_url'],
-            "timestamp": current_time.isoformat(),
-            "footer": {
-                "text": f"Futbin Bot • {profit_quality} Opportunity • Platform: {platform.upper()}",
-            },
-            "author": {
-                "name": "🤖 Trading Alert System",
-            }
-        }
-        
-        # Add player image if we have the futbin_id
-        if player_image_url:
-            embed["thumbnail"] = {
-                "url": player_image_url
-            }
-        
-        # Add visual separator for high-value alerts
-        if profit_margin >= 25:
-            embed["image"] = {
-                "url": "https://via.placeholder.com/400x2/00ff00/00ff00.png"  # Green line separator
-            }
-        
-        payload = {
-            "embeds": [embed]
-        }
-        
-        try:
-            response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
-            if response.status_code == 204:
-                print("✅ Enhanced Discord notification sent with player image")
-            else:
-                print(f"❌ Discord error: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Discord error: {e}")
+            print(f"❌ Discord error: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Discord error: {e}")
     
     def save_price_alert(self, card_id, platform, gap_info):
         """Save price alert to database and prevent duplicates"""
