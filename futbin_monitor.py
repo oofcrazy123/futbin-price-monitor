@@ -1237,26 +1237,82 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
         
     def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
-        """Send Discord notification matching the exact format shown"""
-        if not Config.DISCORD_WEBHOOK_URL:
-            return  # Discord not configured
+    """Send Discord notification with proper player name and same image as Telegram"""
+    if not Config.DISCORD_WEBHOOK_URL:
+        return  # Discord not configured
+    
+    # Color based on profit margin
+    if profit_margin >= 30:
+        color = 0xff4500  # Red-orange
+    elif profit_margin >= 20:
+        color = 0x00ff00  # Green
+    elif profit_margin >= 10:
+        color = 0xffa500  # Orange
+    else:
+        color = 0x0099ff  # Blue
+    
+    # Extract player image from Futbin page (same image that shows in Telegram)
+    def get_player_image_from_url(self, futbin_url):
+        """Extract the og:image from Futbin page - same image Telegram shows"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(futbin_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Look for og:image meta tag (this is what Telegram uses)
+                og_image = soup.find('meta', property='og:image')
+                if og_image and og_image.get('content'):
+                    return og_image['content']
+                
+                # Fallback: look for player image in the page
+                player_img = soup.find('img', {'class': 'player-img'}) or \
+                           soup.find('img', {'id': 'player-img'}) or \
+                           soup.find('img', src=lambda x: x and 'players' in x)
+                
+                if player_img and player_img.get('src'):
+                    img_src = player_img['src']
+                    # Convert relative URL to absolute
+                    if img_src.startswith('//'):
+                        return f"https:{img_src}"
+                    elif img_src.startswith('/'):
+                        return f"https://www.futbin.com{img_src}"
+                    else:
+                        return img_src
+                        
+        except Exception as e:
+            print(f"❌ Error extracting player image: {e}")
         
-        # Simple color based on profit margin
-        if profit_margin >= 30:
-            color = 0xff4500  # Red-orange
-        elif profit_margin >= 20:
-            color = 0x00ff00  # Green
-        elif profit_margin >= 10:
-            color = 0xffa500  # Orange
-        else:
-            color = 0x0099ff  # Blue
+        return None
+    
+    # Get the same player image that Telegram shows
+    thumbnail_url = None
+    if 'futbin_url' in card_info and card_info['futbin_url']:
+        thumbnail_url = get_player_image_from_url(self, card_info['futbin_url'])
         
-        # Title exactly like Image 2
-        title = "FutBin Error Found 🔍"
-        
-        # Description with exact format from Image 2
-        description = f"""**Player**
-{card_info['name']}
+        # Fallback to direct CDN URL if og:image extraction fails
+        if not thumbnail_url:
+            url_parts = card_info['futbin_url'].split('/')
+            if len(url_parts) >= 6:
+                try:
+                    futbin_id = url_parts[5]
+                    thumbnail_url = f"https://cdn3.futbin.com/content/fifa26/img/players/{futbin_id}.png?fm=png&ixlib=java-2.1.0&w=324&s=09330e054dcaf6ca1595f92fee17894a"
+                except:
+                    pass
+    
+    # Title exactly like the image
+    title = "FutBin Error Found 🔍"
+    
+    # Make sure we're using the actual player NAME, not the rating
+    player_name = card_info.get('name', 'Unknown Player')
+    
+    # Description with exact format from image - using PLAYER NAME not rating
+    description = f"""**Player**
+{player_name}
 **Platform**
 {platform.title()}
 **Market Price**
@@ -1269,28 +1325,89 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
 {gap_info['profit_after_tax']:,}
 **Link**
 [FutBin]({card_info['futbin_url']})"""
+    
+    # Clean embed that matches the format
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "url": card_info['futbin_url']
+    }
+    
+    # Add the same player image that Telegram shows
+    if thumbnail_url:
+        embed["thumbnail"] = {"url": thumbnail_url}
+        print(f"🖼️ Using player image: {thumbnail_url}")
+    else:
+        print("⚠️ No player image found")
+    
+    payload = {
+        "embeds": [embed]
+    }
+    
+    try:
+        response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code == 204:
+            print(f"✅ Discord notification sent for {player_name}")
+        else:
+            print(f"❌ Discord error: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Discord error: {e}")
+
+
+# Alternative simpler method - Cache the og:image during initial scraping
+def scrape_card_data_with_image(self, card_element, futbin_url):
+    """Extract card information and cache the og:image"""
+    try:
+        card_info = {}
         
-        # Simple embed that matches Image 2 format
-        embed = {
-            "title": title,
-            "description": description,
-            "color": color,
-            "url": card_info['futbin_url'],
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        payload = {
-            "embeds": [embed]
-        }
-        
-        try:
-            response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
-            if response.status_code == 204:
-                print("✅ FutBin format Discord notification sent")
+        # Get the player NAME (not rating)
+        name_element = card_element.find('span', class_='player_name')
+        if name_element:
+            card_info['name'] = name_element.get_text().strip()
+        else:
+            # Fallback selectors
+            name_alt = card_element.find('a', {'class': 'player-name'}) or \
+                      card_element.find('div', {'class': 'player-name'}) or \
+                      card_element.find('[data-player-name]')
+            if name_alt:
+                card_info['name'] = name_alt.get_text().strip()
             else:
-                print(f"❌ Discord error: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Discord error: {e}")
+                card_info['name'] = 'Unknown Player'
+        
+        # Get rating separately
+        rating_element = card_element.find('span', class_='rating')
+        if rating_element:
+            card_info['rating'] = rating_element.get_text().strip()
+        
+        # Get position
+        position_element = card_element.find('span', class_='position')
+        if position_element:
+            card_info['position'] = position_element.get_text().strip()
+        else:
+            card_info['position'] = ''
+        
+        # Store the URL
+        card_info['futbin_url'] = futbin_url
+        
+        # Extract og:image immediately while we're already on the page
+        try:
+            from bs4 import BeautifulSoup
+            page_content = requests.get(futbin_url).content
+            soup = BeautifulSoup(page_content, 'html.parser')
+            
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image.get('content'):
+                card_info['player_image'] = og_image['content']
+                print(f"🖼️ Cached player image for {card_info['name']}")
+        except:
+            card_info['player_image'] = None
+        
+        return card_info
+        
+    except Exception as e:
+        print(f"❌ Error extracting card data: {e}")
+        return None
     
     def save_price_alert(self, card_id, platform, gap_info):
         """Save price alert to database and prevent duplicates"""
