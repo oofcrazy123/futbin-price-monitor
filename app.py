@@ -280,7 +280,7 @@ def upload_db():
                 <strong>Warning:</strong> This will replace your current database. Make sure to download a backup first if needed.
             </div>
             
-            <a href="/">← Back to Dashboard</a>
+            <a href="/">&larr; Back to Dashboard</a>
         </body>
         </html>
         '''
@@ -308,10 +308,10 @@ def upload_db():
             <html>
             <head><title>Upload Success</title></head>
             <body style="font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px;">
-                <h1>✅ Database Uploaded Successfully!</h1>
+                <h1>&#9989; Database Uploaded Successfully!</h1>
                 <p>Restored database with <strong>{card_count:,}</strong> cards.</p>
                 <p>The bot will now use this data for price monitoring.</p>
-                <a href="/">← Back to Dashboard</a>
+                <a href="/">&larr; Back to Dashboard</a>
             </body>
             </html>
             '''
@@ -371,7 +371,7 @@ def reliability_dashboard():
         <html>
         <head><title>Market Intelligence Dashboard</title></head>
         <body style="font-family: Arial; max-width: 1000px; margin: 50px auto; padding: 20px;">
-            <h1>🧠 Market Intelligence Dashboard</h1>
+            <h1>&#129504; Market Intelligence Dashboard</h1>
             
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0;">
                 <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
@@ -394,7 +394,7 @@ def reliability_dashboard():
             
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin: 30px 0;">
                 <div style="background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6;">
-                    <h3>🚨 Suspicious Patterns Detected</h3>
+                    <h3>&#128680; Suspicious Patterns Detected</h3>
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr style="background: #f8f9fa;">
                             <th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6;">Pattern Type</th>
@@ -405,27 +405,27 @@ def reliability_dashboard():
                 </div>
                 
                 <div style="background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6;">
-                    <h3>⚠️ Worst Performing Cards</h3>
+                    <h3>&#9888; Worst Performing Cards</h3>
                     <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
                         <tr style="background: #f8f9fa;">
                             <th style="padding: 8px; text-align: left; border-bottom: 1px solid #dee2e6;">Player</th>
                             <th style="padding: 8px; text-align: right; border-bottom: 1px solid #dee2e6;">Score</th>
                             <th style="padding: 8px; text-align: center; border-bottom: 1px solid #dee2e6;">Status</th>
                         </tr>
-                        {''.join(f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{"🚫" if blacklisted else "⚠️"}</td></tr>' for name, score, fake, valid, blacklisted in worst_cards)}
+                        {''.join(f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{"&#128683;" if blacklisted else "&#9888;"}</td></tr>' for name, score, fake, valid, blacklisted in worst_cards)}
                     </table>
                 </div>
             </div>
             
             <div style="background: #e7f3ff; padding: 20px; border-radius: 8px; margin: 30px 0;">
-                <h3>📊 How Market Intelligence Works</h3>
+                <h3>&#128202; How Market Intelligence Works</h3>
                 <p><strong>Pattern Recognition:</strong> Detects suspicious price patterns like extreme outliers, round number clustering, isolated low prices, and bot-like sequential pricing.</p>
                 <p><strong>Reliability Scoring:</strong> Each card gets a score (0-100) based on how often its alerts are legitimate vs fake. Low-scoring cards get filtered out.</p>
                 <p><strong>Auto-Blacklisting:</strong> Cards with reliability scores below 20% and multiple failed alerts are automatically blocked from generating future alerts.</p>
                 <p><strong>Learning System:</strong> The bot continuously learns which cards produce genuine opportunities vs market manipulation attempts.</p>
             </div>
             
-            <a href="/">← Back to Dashboard</a>
+            <a href="/">&larr; Back to Dashboard</a>
         </body>
         </html>
         '''
@@ -481,9 +481,9 @@ def logs():
     """Simple logs viewer"""
     return f"""
     <h1>Recent Activity</h1>
-    <p>Monitor Running: {'🟢 Yes' if is_running else '🔴 No'}</p>
+    <p>Monitor Running: {'&#128994; Yes' if is_running else '&#128308; No'}</p>
     <p>Check the Render logs for detailed information.</p>
-    <a href="/">← Back to Dashboard</a>
+    <a href="/">&larr; Back to Dashboard</a>
     """
 
 def keep_alive():
