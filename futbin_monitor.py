@@ -133,55 +133,57 @@ class FutbinPriceMonitor:
             raise
 
     def check_and_send_startup_notification(self):
-        """Send startup notification only once per deployment"""
+        """Send startup notification only once per deployment - improved logic"""
         if self.startup_sent:
             return
         
-        # Create unique instance ID based on timestamp and process
-        instance_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+        # Create a more unique instance ID
+        import uuid
+        instance_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
         
-        # Check if startup notification was sent recently (last 5 minutes)
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        five_minutes_ago = datetime.now() - timedelta(minutes=5)
-        cursor.execute('''
-            SELECT COUNT(*) FROM startup_locks 
-            WHERE startup_time > ?
-        ''', (five_minutes_ago,))
-        
-        recent_startups = cursor.fetchone()[0]
-        
-        if recent_startups == 0:
-            # No recent startup, safe to send notification
-            try:
-                cursor.execute('''
-                    INSERT OR REPLACE INTO startup_locks (instance_id, startup_time)
-                    VALUES (?, ?)
-                ''', (instance_id, datetime.now()))
-                
-                conn.commit()
-                
-                # Send startup notification
-                self.send_notification_to_all(
-                    f"🤖 Futbin Bot Started!\n"
-                    f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
-                    f"⚡ Running on cloud infrastructure\n"
-                    f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%\n"
-                    f"⏰ Alert cooldown: {Config.ALERT_COOLDOWN_MINUTES} minutes",
-                    "🚀 Bot Started"
-                )
-                
-                self.startup_sent = True
-                print("✅ Startup notification sent")
-                
-            except Exception as e:
-                print(f"Error sending startup notification: {e}")
-        else:
-            print(f"⚠️ Startup notification already sent recently, skipping...")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Use a more aggressive lock to prevent race conditions
+            # Try to insert our instance ID immediately - this will fail if another instance is already starting
+            cursor.execute('''
+                INSERT INTO startup_locks (instance_id, startup_time)
+                VALUES (?, ?)
+            ''', (instance_id, datetime.now()))
+            
+            conn.commit()
+            
+            # If we got here, we successfully claimed the startup lock
+            print(f"✅ Startup lock acquired: {instance_id}")
+            
+            # Send startup notification
+            self.send_notification_to_all(
+                f"🤖 Futbin Bot Started!\n"
+                f"📊 Scraping {Config.PAGES_TO_SCRAPE} pages ({Config.PAGES_TO_SCRAPE * Config.CARDS_PER_PAGE:,} cards)\n"
+                f"⚡ Running on cloud infrastructure\n"
+                f"💰 Alert thresholds: {Config.MINIMUM_PRICE_GAP_COINS:,} coins, {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%\n"
+                f"⏰ Alert cooldown: {Config.ALERT_COOLDOWN_MINUTES} minutes\n"
+                f"🔑 Instance: {instance_id[:12]}",
+                "🚀 Bot Started"
+            )
+            
             self.startup_sent = True
-        
-        conn.close()
+            print("✅ Startup notification sent")
+            
+        except sqlite3.IntegrityError:
+            # Another instance already claimed the startup lock
+            print(f"⚠️ Another instance already started, skipping startup notification")
+            self.startup_sent = True
+        except Exception as e:
+            print(f"Error with startup notification: {e}")
+            # Don't block the bot if notification fails
+            self.startup_sent = True
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
     
     def scrape_futbin_cards_list(self, page_num):
         """
@@ -203,13 +205,32 @@ class FutbinPriceMonitor:
             
             print(f"📄 Page {page_num} - Content length: {len(response.content)} bytes")
             
+            # Debug: Save a sample of the HTML to see the actual structure
+            if page_num == 1:
+                print("🔍 DEBUG: Analyzing page structure...")
+                print(f"Page title: {soup.title.string if soup.title else 'No title'}")
+                
+                # Look for any tables on the page
+                all_tables = soup.find_all('table')
+                print(f"Found {len(all_tables)} tables on the page")
+                
+                # Look for any player links
+                all_player_links = soup.find_all('a', href=lambda x: x and '/player/' in str(x))
+                print(f"Found {len(all_player_links)} total player links")
+                
+                if len(all_player_links) < 10:
+                    print("⚠️ WARNING: Very few player links found - website structure may have changed")
+                    print("First few links found:")
+                    for i, link in enumerate(all_player_links[:5]):
+                        print(f"  {i+1}. {link.get('href')} - {link.get_text(strip=True)}")
+            
             # Look for the main players table
             players_table = soup.find('table', class_='futbin-table players-table')
             if not players_table:
                 players_table = soup.find('table', class_='futbin-table')
             
             if players_table:
-                print("✅ Found futbin-table players-table")
+                print("✅ Found futbin-table")
                 
                 # Look for tbody with player rows
                 tbody = players_table.find('tbody', class_='with-border with-background')
@@ -223,6 +244,9 @@ class FutbinPriceMonitor:
                     player_rows = tbody.find_all('tr')
                     print(f"🔍 Found {len(player_rows)} rows in tbody")
                     
+                    if len(player_rows) == 0:
+                        print("⚠️ WARNING: No rows found in tbody - this could be why card count is low")
+                    
                     for i, row in enumerate(player_rows):
                         try:
                             # Look for player links in this row
@@ -235,6 +259,9 @@ class FutbinPriceMonitor:
                                     cards.append(card_data)
                                     if i < 3:  # Show first 3 for debugging
                                         print(f"✅ Extracted: {card_data['name']} ({card_data['rating']})")
+                                else:
+                                    if i < 3:  # Show failures for first few rows
+                                        print(f"❌ Failed to extract from row {i+1}")
                         except Exception as e:
                             print(f"Error processing row {i}: {e}")
                             continue
@@ -247,6 +274,10 @@ class FutbinPriceMonitor:
                 all_player_links = soup.find_all('a', href=lambda x: x and '/player/' in str(x))
                 print(f"🔗 Found {len(all_player_links)} total player links on page")
                 
+                if len(all_player_links) == 0:
+                    print("❌ CRITICAL: No player links found at all - Futbin structure has likely changed")
+                    return []
+                
                 # Group by player URL to avoid duplicates
                 unique_players = {}
                 for link in all_player_links:
@@ -258,6 +289,8 @@ class FutbinPriceMonitor:
                         }
                     else:
                         unique_players[href]['texts'].append(link.get_text(strip=True))
+                
+                print(f"🔗 Found {len(unique_players)} unique player URLs")
                 
                 # Convert to card format
                 for url, data in unique_players.items():
@@ -425,13 +458,16 @@ class FutbinPriceMonitor:
                 else:
                     print(f"⚠️ Page {page}: No cards found")
                 
-                # Progress notification every N pages (configurable)
-                if page % Config.PROGRESS_NOTIFICATION_INTERVAL == 0:
-                    self.send_notification_to_all(
-                        f"📊 Scraping Progress: {page}/{Config.PAGES_TO_SCRAPE} pages complete\n"
-                        f"💾 Total cards saved: {total_saved}",
-                        "📊 Scraping Progress"
-                    )
+                # Progress notification every N pages (configurable) - but not too frequent
+                if page % Config.PROGRESS_NOTIFICATION_INTERVAL == 0 and page > 0:
+                    print(f"📊 Progress: {page}/{Config.PAGES_TO_SCRAPE} pages, {total_saved} cards saved")
+                    # Only send notification every 50 pages to avoid spam
+                    if page % 50 == 0:
+                        self.send_notification_to_all(
+                            f"📊 Scraping Progress: {page}/{Config.PAGES_TO_SCRAPE} pages complete\n"
+                            f"💾 Total cards saved: {total_saved}",
+                            "📊 Scraping Progress"
+                        )
                 
                 # Random delay between pages (configurable)
                 delay_min, delay_max = Config.get_scraping_delay_range()
@@ -692,50 +728,46 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         if not Config.DISCORD_WEBHOOK_URL:
             return  # Discord not configured
         
-        # Determine profit quality emoji
+        # Determine profit quality emoji and color
         if profit_margin >= 20:
             profit_emoji = "🤑"
+            color = 0x00ff00  # Green
         elif profit_margin >= 10:
             profit_emoji = "💰"
+            color = 0xffaa00  # Orange
         else:
             profit_emoji = "💡"
+            color = 0x0099ff  # Blue
         
-        # Discord embed format
+        # Clean, simple Discord embed
         embed = {
-            "title": f"{profit_emoji} TRADING OPPORTUNITY - {profit_quality}",
-            "description": f"**{card_info['name']}**",
-            "color": 0x00ff00 if profit_margin >= 20 else 0xffaa00 if profit_margin >= 10 else 0x0099ff,
+            "title": f"{profit_emoji} {card_info['name']} - {profit_quality} OPPORTUNITY",
+            "description": f"**Rating {card_info['rating']} | {card_info['position']} | {platform.upper()}**",
+            "color": color,
             "fields": [
                 {
                     "name": "💰 Buy Price",
-                    "value": f"{gap_info['buy_price']:,} coins",
+                    "value": f"{gap_info['buy_price']:,}",
                     "inline": True
                 },
                 {
                     "name": "🏷️ Sell Price", 
-                    "value": f"{gap_info['sell_price']:,} coins",
+                    "value": f"{gap_info['sell_price']:,}",
                     "inline": True
                 },
                 {
                     "name": "🎯 Profit",
-                    "value": f"{gap_info['profit_after_tax']:,} coins ({profit_margin:.1f}%)",
+                    "value": f"**{gap_info['profit_after_tax']:,}** ({profit_margin:.1f}%)",
                     "inline": True
-                },
-                {
-                    "name": "📊 Details",
-                    "value": f"⭐ {card_info['rating']} | 🏆 {card_info['position']} | 📱 {platform.upper()}",
-                    "inline": False
-                },
-                {
-                    "name": "📈 Strategy",
-                    "value": f"1️⃣ Buy at {gap_info['buy_price']:,}\n2️⃣ Sell at {gap_info['sell_price']:,}\n3️⃣ Profit {gap_info['profit_after_tax']:,} after tax",
-                    "inline": False
                 }
             ],
             "url": card_info['futbin_url'],
+            "thumbnail": {
+                "url": card_info['futbin_url']
+            },
             "timestamp": datetime.now().isoformat(),
             "footer": {
-                "text": f"EA Tax: {gap_info['ea_tax']:,} coins"
+                "text": f"EA Tax: {gap_info['ea_tax']:,} | After Tax: {gap_info['sell_price_after_tax']:,}"
             }
         }
         
