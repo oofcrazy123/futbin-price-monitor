@@ -1,4 +1,71 @@
-# app.py (Web interface + background worker)
+@app.route('/reliability')
+def reliability_dashboard():
+    """Show card reliability and market intelligence dashboard"""
+    try:
+        conn = sqlite3.connect('futbin_cards.db')
+        cursor = conn.cursor()
+        
+        # Get reliability statistics
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total_tracked,
+                AVG(reliability_score) as avg_score,
+                COUNT(CASE WHEN blacklisted = 1 THEN 1 END) as blacklisted_count,
+                COUNT(CASE WHEN reliability_score < 30 THEN 1 END) as low_reliability_count
+            FROM card_reliability
+        ''')
+        
+        stats = cursor.fetchone()
+        total_tracked, avg_score, blacklisted, low_reliability = stats or (0, 0, 0, 0)
+        
+        # Get top suspicious patterns
+        cursor.execute('''
+            SELECT pattern_type, COUNT(*) as count
+            FROM price_pattern_history 
+            WHERE flagged_as_suspicious = 1
+            GROUP BY pattern_type
+            ORDER BY count DESC
+            LIMIT 5
+        ''')
+        
+        suspicious_patterns = cursor.fetchall()
+        
+        # Get worst performing cards
+        cursor.execute('''
+            SELECT c.name, cr.reliability_score, cr.fake_alert_count, cr.valid_alert_count, cr.blacklisted
+            FROM card_reliability cr
+            JOIN cards c ON cr.card_id = c.id
+            WHERE cr.fake_alert_count + cr.valid_alert_count >= 3
+            ORDER BY cr.reliability_score ASC
+            LIMIT 10
+        ''')
+        
+        worst_cards = cursor.fetchall()
+        
+        conn.close()
+        
+        return f'''
+        <html>
+        <head><title>Market Intelligence Dashboard</title></head>
+        <body style="font-family: Arial; max-width: 1000px; margin: 50px auto; padding: 20px;">
+            <h1>🧠 Market Intelligence Dashboard</h1>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0;">
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Cards Tracked</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #007cba;">{total_tracked}</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Avg Reliability</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #28a745;">{avg_score:.1f}%</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Blacklisted</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #dc3545;">{blacklisted}</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Low Reliability</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #ffc107;">{low# app.py (Web interface + background worker)
 from flask import Flask, render_template, jsonify, send_file, request
 import threading
 import time
@@ -125,6 +192,14 @@ def home():
             <p><strong>Environment Check:</strong> <span id="env-status">Checking...</span></p>
         </div>
         
+        <div style="background: #f0f8ff; padding: 20px; margin: 20px 0; border-radius: 8px;">
+            <h3>🧠 Market Intelligence</h3>
+            <p>Advanced pattern recognition and reliability scoring system</p>
+            <a href="/reliability" style="padding: 10px 20px; background: #6f42c1; color: white; text-decoration: none; border-radius: 4px;">
+                View Intelligence Dashboard
+            </a>
+        </div>
+        
         <script>
             function checkStatus() {
                 fetch('/status')
@@ -245,6 +320,118 @@ def upload_db():
             
     except Exception as e:
         return f"Error uploading database: {str(e)}", 500
+
+@app.route('/reliability')
+def reliability_dashboard():
+    """Show card reliability and market intelligence dashboard"""
+    try:
+        conn = sqlite3.connect('futbin_cards.db')
+        cursor = conn.cursor()
+        
+        # Get reliability statistics
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total_tracked,
+                AVG(reliability_score) as avg_score,
+                COUNT(CASE WHEN blacklisted = 1 THEN 1 END) as blacklisted_count,
+                COUNT(CASE WHEN reliability_score < 30 THEN 1 END) as low_reliability_count
+            FROM card_reliability
+        ''')
+        
+        stats = cursor.fetchone()
+        total_tracked, avg_score, blacklisted, low_reliability = stats or (0, 0, 0, 0)
+        
+        # Get top suspicious patterns
+        cursor.execute('''
+            SELECT pattern_type, COUNT(*) as count
+            FROM price_pattern_history 
+            WHERE flagged_as_suspicious = 1
+            GROUP BY pattern_type
+            ORDER BY count DESC
+            LIMIT 5
+        ''')
+        
+        suspicious_patterns = cursor.fetchall()
+        
+        # Get worst performing cards
+        cursor.execute('''
+            SELECT c.name, cr.reliability_score, cr.fake_alert_count, cr.valid_alert_count, cr.blacklisted
+            FROM card_reliability cr
+            JOIN cards c ON cr.card_id = c.id
+            WHERE cr.fake_alert_count + cr.valid_alert_count >= 3
+            ORDER BY cr.reliability_score ASC
+            LIMIT 10
+        ''')
+        
+        worst_cards = cursor.fetchall()
+        
+        conn.close()
+        
+        return f'''
+        <html>
+        <head><title>Market Intelligence Dashboard</title></head>
+        <body style="font-family: Arial; max-width: 1000px; margin: 50px auto; padding: 20px;">
+            <h1>🧠 Market Intelligence Dashboard</h1>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0;">
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Cards Tracked</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #007cba;">{total_tracked}</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Avg Reliability</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #28a745;">{avg_score:.1f}%</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Blacklisted</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #dc3545;">{blacklisted}</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                    <h3>Low Reliability</h3>
+                    <div style="font-size: 2em; font-weight: bold; color: #ffc107;">{low_reliability}</div>
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin: 30px 0;">
+                <div style="background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6;">
+                    <h3>🚨 Suspicious Patterns Detected</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6;">Pattern Type</th>
+                            <th style="padding: 10px; text-align: right; border-bottom: 1px solid #dee2e6;">Count</th>
+                        </tr>
+                        {''.join(f'<tr><td style="padding: 8px; border-bottom: 1px solid #f1f3f4;">{pattern}</td><td style="padding: 8px; text-align: right; border-bottom: 1px solid #f1f3f4;">{count}</td></tr>' for pattern, count in suspicious_patterns)}
+                    </table>
+                </div>
+                
+                <div style="background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6;">
+                    <h3>⚠️ Worst Performing Cards</h3>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 8px; text-align: left; border-bottom: 1px solid #dee2e6;">Player</th>
+                            <th style="padding: 8px; text-align: right; border-bottom: 1px solid #dee2e6;">Score</th>
+                            <th style="padding: 8px; text-align: center; border-bottom: 1px solid #dee2e6;">Status</th>
+                        </tr>
+                        {''.join(f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{"🚫" if blacklisted else "⚠️"}</td></tr>' for name, score, fake, valid, blacklisted in worst_cards)}
+                    </table>
+                </div>
+            </div>
+            
+            <div style="background: #e7f3ff; padding: 20px; border-radius: 8px; margin: 30px 0;">
+                <h3>📊 How Market Intelligence Works</h3>
+                <p><strong>Pattern Recognition:</strong> Detects suspicious price patterns like extreme outliers, round number clustering, isolated low prices, and bot-like sequential pricing.</p>
+                <p><strong>Reliability Scoring:</strong> Each card gets a score (0-100) based on how often its alerts are legitimate vs fake. Low-scoring cards get filtered out.</p>
+                <p><strong>Auto-Blacklisting:</strong> Cards with reliability scores below 20% and multiple failed alerts are automatically blocked from generating future alerts.</p>
+                <p><strong>Learning System:</strong> The bot continuously learns which cards produce genuine opportunities vs market manipulation attempts.</p>
+            </div>
+            
+            <a href="/">← Back to Dashboard</a>
+        </body>
+        </html>
+        '''
+        
+    except Exception as e:
+        return f"Error loading reliability dashboard: {str(e)}", 500
 
 @app.route('/status')
 def status():

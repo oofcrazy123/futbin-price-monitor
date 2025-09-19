@@ -116,6 +116,35 @@ class FutbinPriceMonitor:
                 )
             ''')
             
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS card_reliability (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    card_id INTEGER,
+                    suspicious_pattern_count INTEGER DEFAULT 0,
+                    fake_alert_count INTEGER DEFAULT 0,
+                    valid_alert_count INTEGER DEFAULT 0,
+                    reliability_score REAL DEFAULT 100.0,
+                    last_suspicious_at TIMESTAMP,
+                    blacklisted BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (card_id) REFERENCES cards (id),
+                    UNIQUE(card_id)
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS price_pattern_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    card_id INTEGER,
+                    price_sequence TEXT,
+                    pattern_type TEXT,
+                    flagged_as_suspicious BOOLEAN DEFAULT 0,
+                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (card_id) REFERENCES cards (id)
+                )
+            ''')
+            
             conn.commit()
             
             # Test if we can actually read/write
@@ -589,7 +618,311 @@ class FutbinPriceMonitor:
         except:
             return 0
     
-    def analyze_price_gap(self, prices_list):
+    def is_popular_card(self, card_id, card_name, card_rating):
+        """Detect if a card is likely popular based on monitoring patterns and characteristics"""
+        
+        # High-rated players are inherently popular
+        if card_rating >= 84:
+            return True
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Check monitoring frequency - popular cards get checked more often
+            cursor.execute('''
+                SELECT COUNT(*) FROM price_pattern_history 
+                WHERE card_id = ? AND detected_at > datetime('now', '-7 days')
+            ''', (card_id,))
+            
+            recent_checks = cursor.fetchone()[0]
+            
+            # Check alert frequency - popular cards generate more alerts (real or fake)
+            cursor.execute('''
+                SELECT COUNT(*) FROM price_alerts 
+                WHERE card_id = ? AND alert_sent_at > datetime('now', '-7 days')
+            ''', (card_id,))
+            
+            recent_alerts = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            # Popular card indicators:
+            # 1. High monitoring frequency (checked 3+ times in last week)
+            # 2. High alert frequency (2+ alerts in last week)
+            # 3. Medium-high rating (80+)
+            # 4. Special card indicators in name
+            
+            is_frequently_monitored = recent_checks >= 3
+            is_frequently_alerted = recent_alerts >= 2
+            is_high_rated = card_rating >= 80
+            
+            # Special card detection
+            special_indicators = ['totw', 'if', 'sbc', 'otw', 'rttk', 'heroes', 'icon', 'inform']
+            has_special_indicator = any(indicator in card_name.lower() for indicator in special_indicators)
+            
+            # Position-based popularity (popular positions)
+            popular_positions = ['st', 'cf', 'cam', 'cm', 'cdm', 'cb', 'gk']
+            # This would need position data from the card, but we can infer from name sometimes
+            
+            # Calculate popularity score
+            popularity_score = 0
+            
+            if is_frequently_monitored:
+                popularity_score += 3
+            if is_frequently_alerted:
+                popularity_score += 3
+            if is_high_rated:
+                popularity_score += 2
+            if has_special_indicator:
+                popularity_score += 2
+            if card_rating >= 85:
+                popularity_score += 1
+            
+            # Consider popular if score >= 4
+            is_popular = popularity_score >= 4
+            
+            if is_popular:
+                print(f"📈 POPULAR CARD DETECTED: {card_name} (score: {popularity_score}, checks: {recent_checks}, alerts: {recent_alerts})")
+            
+            return is_popular
+            
+        except Exception as e:
+            print(f"Error checking card popularity: {e}")
+            # Default to rating-based detection if database check fails
+            return card_rating >= 84
+    
+    def update_card_monitoring_stats(self, card_id):
+        """Track how often cards are being monitored to identify trending/popular cards"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Simple tracking - just log that we checked this card
+            cursor.execute('''
+                INSERT INTO price_pattern_history 
+                (card_id, price_sequence, pattern_type, flagged_as_suspicious)
+                VALUES (?, ?, ?, ?)
+            ''', (card_id, "monitoring_check", "monitoring_log", False))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            # Don't let monitoring stats errors break the main flow
+            pass
+
+    def analyze_price_pattern(self, card_id, prices_list, card_name="", card_rating=0):
+        """Enhanced price pattern analysis with dynamic popular card detection"""
+        try:
+            if len(prices_list) < 3:
+                return {"suspicious": False, "pattern_type": "insufficient_data"}
+            
+            # Track monitoring activity for popularity detection
+            self.update_card_monitoring_stats(card_id)
+            
+            sorted_prices = sorted(prices_list)
+            price_sequence = ",".join(str(p) for p in sorted_prices)
+            
+            suspicious_flags = []
+            pattern_type = "normal"
+            
+            # Check if this is a popular card using dynamic detection
+            is_popular = self.is_popular_card(card_id, card_name, card_rating)
+            
+            # Pattern 1: Extreme outlier detection (stricter for popular cards)
+            if len(sorted_prices) >= 3:
+                first_price = sorted_prices[0]
+                median_price = sorted_prices[len(sorted_prices)//2]
+                
+                # Stricter thresholds for popular cards
+                threshold = 0.4 if is_popular else 0.5  # Popular cards: 40% vs 50%
+                
+                if first_price < (median_price * threshold) and first_price > 10000:
+                    suspicious_flags.append("extreme_outlier")
+                    pattern_type = "outlier_manipulation"
+                    if is_popular:
+                        suspicious_flags.append("popular_card_manipulation")
+            
+            # Pattern 2: Round number clustering (more sensitive for popular cards)
+            round_number_count = 0
+            for price in sorted_prices:
+                price_str = str(price)
+                trailing_zeros = len(price_str) - len(price_str.rstrip('0'))
+                min_zeros = 2 if is_popular else 3  # Popular cards: 2+ zeros vs 3+
+                if trailing_zeros >= min_zeros and price >= 50000:
+                    round_number_count += 1
+            
+            threshold_count = 2 if is_popular else 3  # Need fewer round numbers for popular cards
+            if round_number_count >= threshold_count and len(sorted_prices) >= 3:
+                suspicious_flags.append("round_number_clustering")
+                pattern_type = "round_manipulation"
+            
+            # Pattern 3: Price gap analysis (stricter for popular cards)
+            if len(sorted_prices) >= 4:
+                gaps = []
+                for i in range(len(sorted_prices) - 1):
+                    gap = sorted_prices[i + 1] - sorted_prices[i]
+                    gaps.append(gap)
+                
+                if len(gaps) >= 3:
+                    first_gap = gaps[0]
+                    avg_other_gaps = sum(gaps[1:]) / len(gaps[1:])
+                    
+                    # Popular cards: 3x vs 5x threshold
+                    multiplier = 3 if is_popular else 5
+                    min_gap = 25000 if is_popular else 50000
+                    
+                    if first_gap > (avg_other_gaps * multiplier) and first_gap > min_gap:
+                        suspicious_flags.append("isolated_low_price")
+                        pattern_type = "isolation_manipulation"
+            
+            # Pattern 4: Sequential pricing detection
+            if len(sorted_prices) >= 4:
+                sequential_count = 0
+                common_intervals = [500, 1000, 2000, 5000, 10000] if is_popular else [1000, 2000, 5000, 10000]
+                
+                for i in range(len(sorted_prices) - 1):
+                    price_diff = sorted_prices[i + 1] - sorted_prices[i]
+                    if price_diff in common_intervals:
+                        sequential_count += 1
+                
+                if sequential_count >= 2:
+                    suspicious_flags.append("sequential_pricing")
+                    pattern_type = "bot_manipulation"
+            
+            # Pattern 5: Popular card specific - "Too good to be true" detection
+            if is_popular and len(sorted_prices) >= 2:
+                first_price = sorted_prices[0]
+                second_price = sorted_prices[1]
+                
+                # For popular cards, even 15% gaps can be suspicious (lowered from 20%)
+                if (second_price - first_price) / first_price > 0.15 and first_price > 50000:
+                    suspicious_flags.append("popular_card_gap")
+                    pattern_type = "popular_manipulation"
+            
+            # Save pattern to database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            is_suspicious = len(suspicious_flags) > 0
+            
+            cursor.execute('''
+                INSERT INTO price_pattern_history 
+                (card_id, price_sequence, pattern_type, flagged_as_suspicious)
+                VALUES (?, ?, ?, ?)
+            ''', (card_id, price_sequence, pattern_type, is_suspicious))
+            
+            conn.commit()
+            conn.close()
+            
+            # Higher confidence scoring for popular cards
+            base_confidence = 35 if is_popular else 25
+            confidence = len(suspicious_flags) * base_confidence
+            
+            if is_popular and is_suspicious:
+                print(f"⚠️ POPULAR CARD MANIPULATION: {card_name} - {pattern_type}")
+            
+            return {
+                "suspicious": is_suspicious,
+                "pattern_type": pattern_type,
+                "flags": suspicious_flags,
+                "confidence": min(100, confidence),  # Cap at 100%
+                "is_popular_card": is_popular
+            }
+            
+        except Exception as e:
+            print(f"Error analyzing price pattern: {e}")
+            return {"suspicious": False, "pattern_type": "analysis_error"}
+    
+    def update_card_reliability(self, card_id, is_fake_alert=False, is_valid_alert=False):
+        """Update reliability score for a card based on alert outcomes"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get or create reliability record
+            cursor.execute('''
+                INSERT OR IGNORE INTO card_reliability (card_id) VALUES (?)
+            ''', (card_id,))
+            
+            cursor.execute('''
+                SELECT suspicious_pattern_count, fake_alert_count, valid_alert_count, reliability_score
+                FROM card_reliability WHERE card_id = ?
+            ''', (card_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return
+            
+            suspicious_count, fake_count, valid_count, current_score = row
+            
+            # Update counters
+            if is_fake_alert:
+                fake_count += 1
+                current_score -= 15  # Reduce score for fake alerts
+            elif is_valid_alert:
+                valid_count += 1
+                current_score += 5   # Increase score for valid alerts
+            
+            # Calculate new reliability score
+            total_alerts = fake_count + valid_count
+            if total_alerts > 0:
+                success_rate = valid_count / total_alerts
+                current_score = 50 + (success_rate * 50)  # Scale from 50-100
+            
+            # Clamp score between 0-100
+            current_score = max(0, min(100, current_score))
+            
+            # Auto-blacklist cards with very low reliability
+            blacklisted = current_score < 20 and total_alerts >= 3
+            
+            cursor.execute('''
+                UPDATE card_reliability 
+                SET fake_alert_count = ?, valid_alert_count = ?, reliability_score = ?, 
+                    blacklisted = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE card_id = ?
+            ''', (fake_count, valid_count, current_score, blacklisted, card_id))
+            
+            conn.commit()
+            conn.close()
+            
+            if blacklisted:
+                print(f"⚠️ Card {card_id} auto-blacklisted due to low reliability score: {current_score:.1f}")
+            
+        except Exception as e:
+            print(f"Error updating card reliability: {e}")
+    
+    def check_card_reliability(self, card_id):
+        """Check if a card should be monitored based on reliability score"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT reliability_score, blacklisted, fake_alert_count, valid_alert_count
+                FROM card_reliability WHERE card_id = ?
+            ''', (card_id,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if not row:
+                return {"monitor": True, "score": 100.0, "reason": "new_card"}
+            
+            score, blacklisted, fake_count, valid_count = row
+            
+            if blacklisted:
+                return {"monitor": False, "score": score, "reason": "blacklisted"}
+            
+            if score < 30 and (fake_count + valid_count) >= 5:
+                return {"monitor": False, "score": score, "reason": "low_reliability"}
+            
+            return {"monitor": True, "score": score, "reason": "reliable"}
+            
+        except Exception as e:
+            print(f"Error checking card reliability: {e}")
+            return {"monitor": True, "score": 100.0, "reason": "check_error"}
         """
         Analyze price gap between first and second lowest prices with comprehensive intelligent validation
         Calculate actual trading profit after EA tax and filter out invalid/suspicious data
@@ -1056,33 +1389,69 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         return True
     
     def get_cards_to_monitor(self, limit=200):
-        """Get cards from database to monitor for price gaps"""
+        """Get cards from database to monitor for price gaps - focuses on viable trading cards"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Focus on high-value cards first
+        # Get a balanced mix of cards across viable rating ranges
+        cards = []
+        
+        # 1. High-rated cards (85+) - 25% of monitoring
+        high_rated_limit = int(limit * 0.25)
         cursor.execute('''
             SELECT id, name, rating, position, club, nation, league, futbin_url
             FROM cards 
-            WHERE rating >= 80 
-            ORDER BY rating DESC, name ASC
+            WHERE rating >= 85 
+            ORDER BY rating DESC, RANDOM()
             LIMIT ?
-        ''', (limit,))
+        ''', (high_rated_limit,))
         
-        cards = []
         for row in cursor.fetchall():
             cards.append({
-                'id': row[0],
-                'name': row[1],
-                'rating': row[2],
-                'position': row[3],
-                'club': row[4],
-                'nation': row[5],
-                'league': row[6],
-                'futbin_url': row[7]
+                'id': row[0], 'name': row[1], 'rating': row[2], 'position': row[3],
+                'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
+            })
+        
+        # 2. Mid-rated cards (75-84) - 60% of monitoring (increased)
+        mid_rated_limit = int(limit * 0.60)
+        cursor.execute('''
+            SELECT id, name, rating, position, club, nation, league, futbin_url
+            FROM cards 
+            WHERE rating >= 75 AND rating < 85
+            ORDER BY RANDOM()
+            LIMIT ?
+        ''', (mid_rated_limit,))
+        
+        for row in cursor.fetchall():
+            cards.append({
+                'id': row[0], 'name': row[1], 'rating': row[2], 'position': row[3],
+                'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
+            })
+        
+        # 3. Budget cards (65-74) - 15% of monitoring  
+        budget_limit = int(limit * 0.15)
+        cursor.execute('''
+            SELECT id, name, rating, position, club, nation, league, futbin_url
+            FROM cards 
+            WHERE rating >= 65 AND rating < 75
+            ORDER BY RANDOM()
+            LIMIT ?
+        ''', (budget_limit,))
+        
+        for row in cursor.fetchall():
+            cards.append({
+                'id': row[0], 'name': row[1], 'rating': row[2], 'position': row[3],
+                'club': row[4], 'nation': row[5], 'league': row[6], 'futbin_url': row[7]
             })
         
         conn.close()
+        
+        # Shuffle the final list to mix different rating ranges
+        import random
+        random.shuffle(cards)
+        
+        print(f"📊 Monitoring mix: {high_rated_limit} high-rated (85+), {mid_rated_limit} mid-rated (75-84), {budget_limit} budget (65-74) cards")
+        
         return cards
     
     def run_price_monitoring(self):
@@ -1110,7 +1479,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
                         if prices:
                             for platform, price_list in prices.items():
                                 if len(price_list) >= 2:
-                                    gap_info = self.analyze_price_gap(price_list)
+                                    gap_info = self.analyze_price_gap(price_list, card['id'])
                                     if gap_info:
                                         self.send_price_alert(card, platform, gap_info)
                                         alerts_sent += 1
