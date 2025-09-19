@@ -572,10 +572,11 @@ class FutbinPriceMonitor:
     
     def analyze_price_gap(self, prices_list):
         """
-        Analyze price gap between first and second lowest prices
-        Calculate actual trading profit after EA tax with intelligent fake price detection
+        Analyze price gap between first and second lowest prices with comprehensive intelligent validation
+        Calculate actual trading profit after EA tax and filter out invalid/suspicious data
         """
         if len(prices_list) < 2:
+            print("❌ VALIDATION FAILED: Need at least 2 prices for comparison")
             return None
         
         # Sort to ensure we have lowest prices first
@@ -583,28 +584,54 @@ class FutbinPriceMonitor:
         buy_price = sorted_prices[0]  # First (lowest) price - what we buy for
         sell_price = sorted_prices[1]  # Second price - what we sell for
         
+        # COMPREHENSIVE PRICE VALIDATION
+        
+        # 1. Check for zero or negative prices (critical validation)
+        if buy_price <= 0:
+            print(f"❌ INVALID BUY PRICE: {buy_price} (must be positive)")
+            return None
+            
+        if sell_price <= 0:
+            print(f"❌ INVALID SELL PRICE: {sell_price} (must be positive)")
+            return None
+        
+        # 2. Check for minimum viable prices
         if buy_price < Config.MINIMUM_CARD_PRICE:
+            print(f"❌ BUY PRICE TOO LOW: {buy_price:,} < {Config.MINIMUM_CARD_PRICE:,}")
+            return None
+        
+        # 3. Logical price validation - sell price must be higher than buy price
+        if sell_price <= buy_price:
+            print(f"❌ ILLOGICAL PRICES: sell ({sell_price:,}) <= buy ({buy_price:,})")
+            return None
+        
+        # 4. Check for unrealistically low prices (potential data errors)
+        if buy_price < 500:  # Cards under 500 coins are likely data errors
+            print(f"❌ UNREALISTIC LOW PRICE: {buy_price} coins (likely scraping error)")
+            return None
+        
+        # 5. Check for identical prices (no actual gap)
+        if buy_price == sell_price:
+            print(f"❌ NO PRICE GAP: Both prices are {buy_price:,}")
             return None
         
         # INTELLIGENT FAKE PRICE DETECTION
         
-        # 1. Detect suspiciously large gaps on expensive cards
+        # 6. Detect suspiciously large gaps on expensive cards
+        price_ratio = sell_price / buy_price
         if buy_price >= 500000:  # Cards over 500k coins
-            price_ratio = sell_price / buy_price
             if price_ratio > 2.0:  # More than 100% difference
                 print(f"⚠️ FAKE PRICE DETECTED: {buy_price:,} vs {sell_price:,} (ratio: {price_ratio:.1f}x) - skipping")
                 return None
         
-        # 2. Ultra-expensive cards (1M+) need even stricter filtering
+        # 7. Ultra-expensive cards (1M+) need even stricter filtering
         if buy_price >= 1000000:  # Cards over 1M coins
-            price_ratio = sell_price / buy_price
             if price_ratio > 1.3:  # More than 30% difference is suspicious
                 print(f"⚠️ HIGH-VALUE FAKE PRICE: {buy_price:,} vs {sell_price:,} (ratio: {price_ratio:.1f}x) - skipping")
                 return None
         
-        # 3. Check for round number manipulation (common fake price tactic)
+        # 8. Check for round number manipulation (common fake price tactic)
         if buy_price >= 100000:  # Only for expensive cards
-            # Detect if buy_price is suspiciously round (ends in many zeros)
             buy_str = str(buy_price)
             trailing_zeros = len(buy_str) - len(buy_str.rstrip('0'))
             
@@ -615,7 +642,7 @@ class FutbinPriceMonitor:
                     print(f"⚠️ ROUND NUMBER FAKE: {buy_price:,} (ends in {trailing_zeros} zeros) vs {sell_price:,} - skipping")
                     return None
         
-        # 4. Detect extreme percentage gaps that are unrealistic
+        # 9. Detect extreme percentage gaps that are unrealistic
         raw_profit = sell_price - buy_price
         raw_percentage = (raw_profit / buy_price) * 100
         
@@ -629,10 +656,18 @@ class FutbinPriceMonitor:
         elif buy_price >= 500000 and raw_percentage > 60:  # 500k+ cards: max 60% gap
             print(f"⚠️ UNREALISTIC PROFIT on 500k+ card: {raw_percentage:.1f}% - likely fake")
             return None
+        elif buy_price >= 100000 and raw_percentage > 100:  # 100k+ cards: max 100% gap
+            print(f"⚠️ UNREALISTIC PROFIT on 100k+ card: {raw_percentage:.1f}% - likely fake")
+            return None
         
-        # 5. Multiple price validation - check if we have more prices to validate
+        # 10. Multiple price validation - check if we have more prices to validate
         if len(sorted_prices) >= 3:
             third_price = sorted_prices[2]
+            
+            # Validate third price is also positive
+            if third_price <= 0:
+                print(f"❌ INVALID THIRD PRICE: {third_price}")
+                return None
             
             # If first price is much lower than both second AND third, likely fake
             second_ratio = sell_price / buy_price
@@ -642,6 +677,22 @@ class FutbinPriceMonitor:
                 print(f"⚠️ ISOLATED LOW PRICE: {buy_price:,} vs {sell_price:,} & {third_price:,} - likely fake listing")
                 return None
         
+        # 11. Check for data consistency across all available prices
+        if len(sorted_prices) >= 4:
+            # If we have 4+ prices, ensure they follow a logical progression
+            for i in range(len(sorted_prices) - 1):
+                current_price = sorted_prices[i]
+                next_price = sorted_prices[i + 1]
+                
+                if current_price <= 0 or next_price <= 0:
+                    print(f"❌ INVALID PRICE IN SEQUENCE: {current_price} or {next_price}")
+                    return None
+                
+                # Prices should not jump by more than 300% between consecutive entries
+                if next_price / current_price > 4.0:
+                    print(f"⚠️ SUSPICIOUS PRICE JUMP: {current_price:,} → {next_price:,} (ratio: {next_price/current_price:.1f}x)")
+                    return None
+        
         # Calculate EA tax (5% on all sales)
         ea_tax = sell_price * 0.05
         sell_price_after_tax = sell_price - ea_tax
@@ -649,14 +700,26 @@ class FutbinPriceMonitor:
         # Calculate actual profit
         profit_after_tax = sell_price_after_tax - buy_price
         
-        # Only alert if there's actual profit after tax
+        # 12. Validate EA tax calculation makes sense
+        if ea_tax <= 0:
+            print(f"❌ INVALID EA TAX CALCULATION: {ea_tax}")
+            return None
+        
+        # 13. Only alert if there's actual meaningful profit after tax
         if profit_after_tax < Config.MINIMUM_PRICE_GAP_COINS:
+            print(f"❌ PROFIT TOO LOW: {profit_after_tax:,} < {Config.MINIMUM_PRICE_GAP_COINS:,} after tax")
             return None
         
         # Calculate percentage profit (based on buy price)
         percentage_profit = (profit_after_tax / buy_price) * 100
         
         if percentage_profit < Config.MINIMUM_PRICE_GAP_PERCENTAGE:
+            print(f"❌ PERCENTAGE TOO LOW: {percentage_profit:.1f}% < {Config.MINIMUM_PRICE_GAP_PERCENTAGE}%")
+            return None
+        
+        # 14. Final sanity check on all calculated values
+        if sell_price_after_tax <= 0 or profit_after_tax <= 0 or percentage_profit <= 0:
+            print(f"❌ INVALID CALCULATIONS: after_tax={sell_price_after_tax:,}, profit={profit_after_tax:,}, percentage={percentage_profit:.1f}%")
             return None
         
         # Final validation: Log legitimate opportunities for expensive cards
@@ -783,52 +846,148 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         print(f"🚨 TRADING ALERT: {card_info['name']} ({platform}) - Buy {gap_info['buy_price']:,}, Sell {gap_info['sell_price']:,}, Profit {gap_info['profit_after_tax']:,}")
         
     def send_discord_notification(self, card_info, platform, gap_info, profit_margin, profit_quality):
-        """Send Discord webhook notification"""
+        """Send enhanced Discord webhook notification with actual player image"""
         if not Config.DISCORD_WEBHOOK_URL:
             return  # Discord not configured
         
-        # Determine profit quality emoji and color
-        if profit_margin >= 20:
-            profit_emoji = "🤑"
+        # Enhanced profit quality system with more tiers
+        if profit_margin >= 50:
+            profit_emoji = "💎"
+            profit_quality = "DIAMOND"
+            color = 0x9932cc  # Purple
+        elif profit_margin >= 30:
+            profit_emoji = "🔥"
+            profit_quality = "FIRE"
+            color = 0xff4500  # Red-orange
+        elif profit_margin >= 20:
+            profit_emoji = "🚀"
+            profit_quality = "ROCKET"
             color = 0x00ff00  # Green
         elif profit_margin >= 10:
-            profit_emoji = "💰"
-            color = 0xffaa00  # Orange
+            profit_emoji = "⭐"
+            profit_quality = "STAR"
+            color = 0xffa500  # Orange
         else:
             profit_emoji = "💡"
+            profit_quality = "DECENT"
             color = 0x0099ff  # Blue
         
-        # Clean, simple Discord embed
+        # Create engaging title with player rating context
+        rating_context = ""
+        if card_info['rating'] >= 90:
+            rating_context = "🌟 ELITE"
+        elif card_info['rating'] >= 85:
+            rating_context = "⚡ HIGH-RATED"
+        elif card_info['rating'] >= 80:
+            rating_context = "✨ SOLID"
+        
+        title = f"{profit_emoji} {rating_context} {card_info['name']} - {profit_quality}"
+        
+        # Enhanced description with more context
+        club_info = f"🏟️ {card_info.get('club', 'Unknown')}" if card_info.get('club') else ""
+        nation_info = f"🌍 {card_info.get('nation', 'Unknown')}" if card_info.get('nation') else ""
+        
+        description_parts = [
+            f"**Rating {card_info['rating']} {card_info['position']} on {platform.upper()}**",
+        ]
+        
+        if club_info or nation_info:
+            description_parts.append(f"{club_info} {nation_info}".strip())
+        
+        # Add profit urgency indicator
+        if profit_margin >= 30:
+            description_parts.append("🚨 **HIGH PROFIT OPPORTUNITY**")
+        elif profit_margin >= 15:
+            description_parts.append("⚡ **GOOD PROFIT POTENTIAL**")
+        
+        # Enhanced fields with better formatting and progress bars
+        fields = []
+        
+        # Buy/Sell prices with visual comparison
+        price_ratio = gap_info['sell_price'] / gap_info['buy_price']
+        fields.append({
+            "name": "💰 Buy Price",
+            "value": f"**{gap_info['buy_price']:,}**\n`Lowest BIN`",
+            "inline": True
+        })
+        
+        fields.append({
+            "name": "🏷️ Sell Price", 
+            "value": f"**{gap_info['sell_price']:,}**\n`2nd Lowest (+{price_ratio-1:.1%})`",
+            "inline": True
+        })
+        
+        fields.append({
+            "name": f"{profit_emoji} Net Profit",
+            "value": f"**{gap_info['profit_after_tax']:,}**\n`{profit_margin:.1f}% ROI`",
+            "inline": True
+        })
+        
+        # Add a quick math breakdown
+        fields.append({
+            "name": "📊 Breakdown",
+            "value": f"Gross: {gap_info['raw_profit']:,}\nEA Tax: -{gap_info['ea_tax']:,}\n**Net: {gap_info['profit_after_tax']:,}**",
+            "inline": True
+        })
+        
+        # Add timing context
+        current_time = datetime.now()
+        time_str = current_time.strftime("%H:%M")
+        fields.append({
+            "name": "⏰ Spotted At",
+            "value": f"**{time_str}**\n`Act quickly!`",
+            "inline": True
+        })
+        
+        # Add card value context
+        if gap_info['buy_price'] >= 1000000:
+            value_tier = "🏆 PREMIUM"
+        elif gap_info['buy_price'] >= 500000:
+            value_tier = "💎 EXPENSIVE"
+        elif gap_info['buy_price'] >= 100000:
+            value_tier = "💰 VALUABLE"
+        else:
+            value_tier = "🪙 BUDGET"
+            
+        fields.append({
+            "name": "📈 Card Tier",
+            "value": f"**{value_tier}**\n`{gap_info['buy_price']:,} range`",
+            "inline": True
+        })
+        
+        # Extract player image URL from futbin_id
+        player_image_url = None
+        if card_info.get('futbin_id'):
+            # Construct the direct image URL using the futbin_id
+            player_image_url = f"https://cdn3.futbin.com/content/fifa26/img/players/{card_info['futbin_id']}.png?fm=png&ixlib=java-2.1.0&w=324&s=09330e054dcaf6ca1595f92fee17894a"
+        
+        # Create the enhanced embed
         embed = {
-            "title": f"{profit_emoji} {card_info['name']} - {profit_quality} OPPORTUNITY",
-            "description": f"**Rating {card_info['rating']} | {card_info['position']} | {platform.upper()}**",
+            "title": title,
+            "description": "\n".join(description_parts),
             "color": color,
-            "fields": [
-                {
-                    "name": "💰 Buy Price",
-                    "value": f"{gap_info['buy_price']:,}",
-                    "inline": True
-                },
-                {
-                    "name": "🏷️ Sell Price", 
-                    "value": f"{gap_info['sell_price']:,}",
-                    "inline": True
-                },
-                {
-                    "name": "🎯 Profit",
-                    "value": f"**{gap_info['profit_after_tax']:,}** ({profit_margin:.1f}%)",
-                    "inline": True
-                }
-            ],
+            "fields": fields,
             "url": card_info['futbin_url'],
-            "thumbnail": {
-                "url": card_info['futbin_url']
-            },
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": current_time.isoformat(),
             "footer": {
-                "text": f"EA Tax: {gap_info['ea_tax']:,} | After Tax: {gap_info['sell_price_after_tax']:,}"
+                "text": f"Futbin Bot • {profit_quality} Opportunity • Platform: {platform.upper()}",
+            },
+            "author": {
+                "name": "🤖 Trading Alert System",
             }
         }
+        
+        # Add player image if we have the futbin_id
+        if player_image_url:
+            embed["thumbnail"] = {
+                "url": player_image_url
+            }
+        
+        # Add visual separator for high-value alerts
+        if profit_margin >= 25:
+            embed["image"] = {
+                "url": "https://via.placeholder.com/400x2/00ff00/00ff00.png"  # Green line separator
+            }
         
         payload = {
             "embeds": [embed]
@@ -837,7 +996,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         try:
             response = requests.post(Config.DISCORD_WEBHOOK_URL, json=payload)
             if response.status_code == 204:
-                print("✅ Discord notification sent")
+                print("✅ Enhanced Discord notification sent with player image")
             else:
                 print(f"❌ Discord error: {response.status_code}")
         except Exception as e:

@@ -28,9 +28,9 @@ class Config:
     # =============================================================================
     # PRICE GAP ALERT CONFIGURATION
     # =============================================================================
-    MINIMUM_PRICE_GAP_COINS = int(os.getenv('MINIMUM_PRICE_GAP_COINS', '1000'))
+    MINIMUM_PRICE_GAP_COINS = int(os.getenv('MINIMUM_PRICE_GAP_COINS', '500'))
     MINIMUM_PRICE_GAP_PERCENTAGE = float(os.getenv('MINIMUM_PRICE_GAP_PERCENTAGE', '5'))
-    MINIMUM_CARD_PRICE = int(os.getenv('MINIMUM_CARD_PRICE', '5000'))
+    MINIMUM_CARD_PRICE = int(os.getenv('MINIMUM_CARD_PRICE', '2000'))
     
     # =============================================================================
     # SCRAPING CONFIGURATION  
