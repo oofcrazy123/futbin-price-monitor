@@ -1,71 +1,4 @@
-@app.route('/reliability')
-def reliability_dashboard():
-    """Show card reliability and market intelligence dashboard"""
-    try:
-        conn = sqlite3.connect('futbin_cards.db')
-        cursor = conn.cursor()
-        
-        # Get reliability statistics
-        cursor.execute('''
-            SELECT 
-                COUNT(*) as total_tracked,
-                AVG(reliability_score) as avg_score,
-                COUNT(CASE WHEN blacklisted = 1 THEN 1 END) as blacklisted_count,
-                COUNT(CASE WHEN reliability_score < 30 THEN 1 END) as low_reliability_count
-            FROM card_reliability
-        ''')
-        
-        stats = cursor.fetchone()
-        total_tracked, avg_score, blacklisted, low_reliability = stats or (0, 0, 0, 0)
-        
-        # Get top suspicious patterns
-        cursor.execute('''
-            SELECT pattern_type, COUNT(*) as count
-            FROM price_pattern_history 
-            WHERE flagged_as_suspicious = 1
-            GROUP BY pattern_type
-            ORDER BY count DESC
-            LIMIT 5
-        ''')
-        
-        suspicious_patterns = cursor.fetchall()
-        
-        # Get worst performing cards
-        cursor.execute('''
-            SELECT c.name, cr.reliability_score, cr.fake_alert_count, cr.valid_alert_count, cr.blacklisted
-            FROM card_reliability cr
-            JOIN cards c ON cr.card_id = c.id
-            WHERE cr.fake_alert_count + cr.valid_alert_count >= 3
-            ORDER BY cr.reliability_score ASC
-            LIMIT 10
-        ''')
-        
-        worst_cards = cursor.fetchall()
-        
-        conn.close()
-        
-        return f'''
-        <html>
-        <head><title>Market Intelligence Dashboard</title></head>
-        <body style="font-family: Arial; max-width: 1000px; margin: 50px auto; padding: 20px;">
-            <h1>🧠 Market Intelligence Dashboard</h1>
-            
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0;">
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
-                    <h3>Cards Tracked</h3>
-                    <div style="font-size: 2em; font-weight: bold; color: #007cba;">{total_tracked}</div>
-                </div>
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
-                    <h3>Avg Reliability</h3>
-                    <div style="font-size: 2em; font-weight: bold; color: #28a745;">{avg_score:.1f}%</div>
-                </div>
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
-                    <h3>Blacklisted</h3>
-                    <div style="font-size: 2em; font-weight: bold; color: #dc3545;">{blacklisted}</div>
-                </div>
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
-                    <h3>Low Reliability</h3>
-                    <div style="font-size: 2em; font-weight: bold; color: #ffc107;">{low# app.py (Web interface + background worker)
+# app.py (Web interface + background worker)
 from flask import Flask, render_template, jsonify, send_file, request
 import threading
 import time
@@ -84,65 +17,63 @@ def start_monitor():
     """Start the price monitor in background"""
     global monitor, is_running
     
-    print("🔄 Attempting to start monitor...")
-    print(f"📁 Current directory: {os.getcwd()}")
-    print(f"📋 Files in directory: {os.listdir('.')}")
+    print("Starting monitor...")
+    print(f"Current directory: {os.getcwd()}")
+    print(f"Files in directory: {os.listdir('.')}")
     
     try:
-        # Add delay to let Flask start properly
-        print("⏳ Waiting 3 seconds for Flask to stabilize...")
+        print("Waiting 3 seconds for Flask to stabilize...")
         time.sleep(3)
         
-        print("📦 Attempting to import FutbinPriceMonitor...")
+        print("Attempting to import FutbinPriceMonitor...")
         
-        # Try to import step by step
         try:
             import futbin_monitor
-            print("✅ Successfully imported futbin_monitor module")
+            print("Successfully imported futbin_monitor module")
         except ImportError as e:
-            print(f"❌ Failed to import futbin_monitor: {e}")
+            print(f"Failed to import futbin_monitor: {e}")
             return
         
         try:
             from futbin_monitor import FutbinPriceMonitor
-            print("✅ Successfully imported FutbinPriceMonitor class")
+            print("Successfully imported FutbinPriceMonitor class")
         except ImportError as e:
-            print(f"❌ Failed to import FutbinPriceMonitor class: {e}")
+            print(f"Failed to import FutbinPriceMonitor class: {e}")
             return
         
-        print("🔧 Creating monitor instance...")
+        print("Creating monitor instance...")
         try:
             monitor = FutbinPriceMonitor()
-            print("✅ Monitor instance created successfully")
+            print("Monitor instance created successfully")
         except Exception as e:
-            print(f"❌ Failed to create monitor instance: {e}")
+            print(f"Failed to create monitor instance: {e}")
             import traceback
             traceback.print_exc()
             return
         
-        print("✅ Monitor initialized, starting complete system...")
+        print("Monitor initialized, starting complete system...")
         is_running = True
         
-        print("🚀 Starting scraping and monitoring...")
+        print("Starting scraping and monitoring...")
         try:
             monitor.run_complete_system()
         except Exception as e:
-            print(f"❌ Error in run_complete_system: {e}")
+            print(f"Error in run_complete_system: {e}")
             import traceback
             traceback.print_exc()
             is_running = False
         
     except Exception as e:
-        print(f"❌ Unexpected monitor error: {e}")
+        print(f"Unexpected monitor error: {e}")
         is_running = False
         import traceback
-        print("📋 Full error traceback:")
+        print("Full error traceback:")
         traceback.print_exc()
 
 @app.route('/')
 def home():
     """Simple web interface to check status"""
-    return '''
+    html_content = """
     <html>
     <head><title>Futbin Price Monitor</title></head>
     <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
@@ -206,12 +137,12 @@ def home():
                     .then(response => response.json())
                     .then(data => {
                         document.getElementById('status').innerHTML = 
-                            '<strong>Monitor Status:</strong> ' + (data.running ? '🟢 Running' : '🔴 Stopped') + '<br>' +
+                            '<strong>Monitor Status:</strong> ' + (data.running ? '&#128994; Running' : '&#128308; Stopped') + '<br>' +
                             '<strong>Cards in Database:</strong> ' + data.card_count + '<br>' +
                             '<strong>Last Update:</strong> ' + data.last_update;
                         
                         document.getElementById('card-count').innerHTML = data.card_count.toLocaleString();
-                        document.getElementById('thread-status').innerHTML = data.running ? '🟢 Yes' : '🔴 No';
+                        document.getElementById('thread-status').innerHTML = data.running ? '&#128994; Yes' : '&#128308; No';
                         document.getElementById('env-status').innerHTML = data.env_check;
                     });
             }
@@ -222,17 +153,16 @@ def home():
         </script>
     </body>
     </html>
-    '''
+    """
+    return html_content
 
 @app.route('/download-db')
 def download_db():
     """Download the current database file"""
     try:
-        # Check if database exists and has data
         if not os.path.exists('futbin_cards.db'):
             return "No database file found", 404
         
-        # Check if database has cards
         conn = sqlite3.connect('futbin_cards.db')
         cursor = conn.cursor()
         cursor.execute('SELECT COUNT(*) FROM cards')
@@ -242,7 +172,6 @@ def download_db():
         if card_count == 0:
             return "Database is empty - no cards to download", 400
         
-        # Generate filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'futbin_cards_backup_{timestamp}.db'
         
@@ -258,7 +187,7 @@ def download_db():
 def upload_db():
     """Upload a database file to restore data"""    
     if request.method == 'GET':
-        return '''
+        html_content = """
         <html>
         <head><title>Upload Database</title></head>
         <body style="font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px;">
@@ -283,7 +212,8 @@ def upload_db():
             <a href="/">&larr; Back to Dashboard</a>
         </body>
         </html>
-        '''
+        """
+        return html_content
     
     try:
         if 'database' not in request.files:
@@ -294,17 +224,15 @@ def upload_db():
             return "No file selected", 400
         
         if file and file.filename.endswith('.db'):
-            # Save uploaded file as the main database
             file.save('futbin_cards.db')
             
-            # Verify the uploaded database
             conn = sqlite3.connect('futbin_cards.db')
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM cards')
             card_count = cursor.fetchone()[0]
             conn.close()
             
-            return f'''
+            html_content = f"""
             <html>
             <head><title>Upload Success</title></head>
             <body style="font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px;">
@@ -314,7 +242,8 @@ def upload_db():
                 <a href="/">&larr; Back to Dashboard</a>
             </body>
             </html>
-            '''
+            """
+            return html_content
         else:
             return "Invalid file type. Please upload a .db file.", 400
             
@@ -328,7 +257,6 @@ def reliability_dashboard():
         conn = sqlite3.connect('futbin_cards.db')
         cursor = conn.cursor()
         
-        # Get reliability statistics
         cursor.execute('''
             SELECT 
                 COUNT(*) as total_tracked,
@@ -341,7 +269,6 @@ def reliability_dashboard():
         stats = cursor.fetchone()
         total_tracked, avg_score, blacklisted, low_reliability = stats or (0, 0, 0, 0)
         
-        # Get top suspicious patterns
         cursor.execute('''
             SELECT pattern_type, COUNT(*) as count
             FROM price_pattern_history 
@@ -353,7 +280,6 @@ def reliability_dashboard():
         
         suspicious_patterns = cursor.fetchall()
         
-        # Get worst performing cards
         cursor.execute('''
             SELECT c.name, cr.reliability_score, cr.fake_alert_count, cr.valid_alert_count, cr.blacklisted
             FROM card_reliability cr
@@ -364,12 +290,20 @@ def reliability_dashboard():
         ''')
         
         worst_cards = cursor.fetchall()
-        
         conn.close()
         
         avg_score_formatted = f"{avg_score:.1f}" if avg_score else "0.0"
         
-        return f'''
+        patterns_html = ""
+        for pattern, count in suspicious_patterns:
+            patterns_html += f'<tr><td style="padding: 8px; border-bottom: 1px solid #f1f3f4;">{pattern}</td><td style="padding: 8px; text-align: right; border-bottom: 1px solid #f1f3f4;">{count}</td></tr>'
+        
+        cards_html = ""
+        for name, score, fake, valid, blacklisted in worst_cards:
+            status_icon = "&#128683;" if blacklisted else "&#9888;"
+            cards_html += f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{status_icon}</td></tr>'
+        
+        html_content = f"""
         <html>
         <head><title>Market Intelligence Dashboard</title></head>
         <body style="font-family: Arial; max-width: 1000px; margin: 50px auto; padding: 20px;">
@@ -402,7 +336,7 @@ def reliability_dashboard():
                             <th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6;">Pattern Type</th>
                             <th style="padding: 10px; text-align: right; border-bottom: 1px solid #dee2e6;">Count</th>
                         </tr>
-                        {''.join(f'<tr><td style="padding: 8px; border-bottom: 1px solid #f1f3f4;">{pattern}</td><td style="padding: 8px; text-align: right; border-bottom: 1px solid #f1f3f4;">{count}</td></tr>' for pattern, count in suspicious_patterns)}
+                        {patterns_html}
                     </table>
                 </div>
                 
@@ -414,7 +348,7 @@ def reliability_dashboard():
                             <th style="padding: 8px; text-align: right; border-bottom: 1px solid #dee2e6;">Score</th>
                             <th style="padding: 8px; text-align: center; border-bottom: 1px solid #dee2e6;">Status</th>
                         </tr>
-                        {''.join(f'<tr><td style="padding: 6px; border-bottom: 1px solid #f1f3f4;">{name[:15]}...</td><td style="padding: 6px; text-align: right; border-bottom: 1px solid #f1f3f4;">{score:.0f}%</td><td style="padding: 6px; text-align: center; border-bottom: 1px solid #f1f3f4;">{"&#128683;" if blacklisted else "&#9888;"}</td></tr>' for name, score, fake, valid, blacklisted in worst_cards)}
+                        {cards_html}
                     </table>
                 </div>
             </div>
@@ -430,7 +364,8 @@ def reliability_dashboard():
             <a href="/">&larr; Back to Dashboard</a>
         </body>
         </html>
-        '''
+        """
+        return html_content
         
     except Exception as e:
         return f"Error loading reliability dashboard: {str(e)}", 500
@@ -439,7 +374,6 @@ def reliability_dashboard():
 def status():
     """API endpoint to check bot status"""
     try:
-        # Check database
         try:
             conn = sqlite3.connect('futbin_cards.db')
             cursor = conn.cursor()
@@ -449,11 +383,10 @@ def status():
         except:
             card_count = 0
         
-        # Check environment variables
         telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
         telegram_chat = os.getenv('TELEGRAM_CHAT_ID')
         
-        env_check = "✅ OK" if telegram_token and telegram_chat else "❌ Missing tokens"
+        env_check = "OK" if telegram_token and telegram_chat else "Missing tokens"
         
         return jsonify({
             'running': is_running,
@@ -468,7 +401,7 @@ def status():
             'running': False,
             'card_count': 0,
             'last_update': 'Error: ' + str(e),
-            'env_check': '❌ Error',
+            'env_check': 'Error',
             'has_token': False,
             'has_chat_id': False
         })
@@ -481,12 +414,16 @@ def health():
 @app.route('/logs')  
 def logs():
     """Simple logs viewer"""
-    return f"""
+    status_icon = "&#128994;" if is_running else "&#128308;"
+    status_text = "Yes" if is_running else "No"
+    
+    html_content = f"""
     <h1>Recent Activity</h1>
-    <p>Monitor Running: {'&#128994; Yes' if is_running else '&#128308; No'}</p>
+    <p>Monitor Running: {status_icon} {status_text}</p>
     <p>Check the Render logs for detailed information.</p>
     <a href="/">&larr; Back to Dashboard</a>
     """
+    return html_content
 
 def keep_alive():
     """Ping self to prevent Render from sleeping"""
@@ -496,25 +433,22 @@ def keep_alive():
             hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
             if hostname != 'localhost':
                 requests.get(f"https://{hostname}/health", timeout=10)
-                print("🏓 Keep-alive ping sent")
+                print("Keep-alive ping sent")
         except Exception as e:
             print(f"Keep-alive error: {e}")
         time.sleep(600)  # Ping every 10 minutes
 
 if __name__ == '__main__':
-    print("🚀 Starting Flask app with background monitor...")
+    print("Starting Flask app with background monitor...")
     
-    # Start monitor in background thread
-    print("🔄 Starting monitor thread...")
+    print("Starting monitor thread...")
     monitor_thread = threading.Thread(target=start_monitor, daemon=True)
     monitor_thread.start()
     
-    # Start keep-alive thread
-    print("🔄 Starting keep-alive thread...")
+    print("Starting keep-alive thread...")
     keepalive_thread = threading.Thread(target=keep_alive, daemon=True)
     keepalive_thread.start()
     
-    # Start Flask web interface
     port = int(os.environ.get('PORT', 5000))
-    print(f"🌐 Starting web server on port {port}...")
+    print(f"Starting web server on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
