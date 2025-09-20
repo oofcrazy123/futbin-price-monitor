@@ -312,9 +312,9 @@ class FutbinPriceMonitor:
             
             return None
         
-    except Exception as e:
-        print(f"Error extracting name from URL {futbin_url}: {e}")
-        return None
+        except Exception as e:
+            print(f"Error extracting name from URL {futbin_url}: {e}")
+            return None
     
     def extract_card_from_row(self, row, player_links):
         """Extract card data from a table row"""
