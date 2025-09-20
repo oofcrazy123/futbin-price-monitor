@@ -283,34 +283,34 @@ class FutbinPriceMonitor:
             return []
     
     def extract_player_name_from_url(self, futbin_url):
-    """Extract player name from Futbin URL when database name is unreliable"""
-    try:
-        if not futbin_url:
+        """Extract player name from Futbin URL when database name is unreliable"""
+        try:
+            if not futbin_url:
+                return None
+            
+            # Split URL and get the last part which contains the player name
+            url_parts = futbin_url.split('/')
+            if len(url_parts) < 2:
+                return None
+            
+            # Get the last segment (player name)
+            name_segment = url_parts[-1]
+            
+            # Remove any query parameters
+            if '?' in name_segment:
+                name_segment = name_segment.split('?')[0]
+            
+            # Replace hyphens and underscores with spaces
+            clean_name = name_segment.replace('-', ' ').replace('_', ' ')
+            
+            # Capitalize each word properly
+            formatted_name = ' '.join(word.capitalize() for word in clean_name.split())
+            
+            # Basic validation - should be more than just numbers
+            if formatted_name and not formatted_name.isdigit() and len(formatted_name) > 2:
+                return formatted_name
+            
             return None
-        
-        # Split URL and get the last part which contains the player name
-        url_parts = futbin_url.split('/')
-        if len(url_parts) < 2:
-            return None
-        
-        # Get the last segment (player name)
-        name_segment = url_parts[-1]
-        
-        # Remove any query parameters
-        if '?' in name_segment:
-            name_segment = name_segment.split('?')[0]
-        
-        # Replace hyphens and underscores with spaces
-        clean_name = name_segment.replace('-', ' ').replace('_', ' ')
-        
-        # Capitalize each word properly
-        formatted_name = ' '.join(word.capitalize() for word in clean_name.split())
-        
-        # Basic validation - should be more than just numbers
-        if formatted_name and not formatted_name.isdigit() and len(formatted_name) > 2:
-            return formatted_name
-        
-        return None
         
     except Exception as e:
         print(f"Error extracting name from URL {futbin_url}: {e}")
