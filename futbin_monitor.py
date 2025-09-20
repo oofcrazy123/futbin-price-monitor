@@ -282,6 +282,40 @@ class FutbinPriceMonitor:
             traceback.print_exc()
             return []
     
+    def extract_player_name_from_url(self, futbin_url):
+    """Extract player name from Futbin URL when database name is unreliable"""
+    try:
+        if not futbin_url:
+            return None
+        
+        # Split URL and get the last part which contains the player name
+        url_parts = futbin_url.split('/')
+        if len(url_parts) < 2:
+            return None
+        
+        # Get the last segment (player name)
+        name_segment = url_parts[-1]
+        
+        # Remove any query parameters
+        if '?' in name_segment:
+            name_segment = name_segment.split('?')[0]
+        
+        # Replace hyphens and underscores with spaces
+        clean_name = name_segment.replace('-', ' ').replace('_', ' ')
+        
+        # Capitalize each word properly
+        formatted_name = ' '.join(word.capitalize() for word in clean_name.split())
+        
+        # Basic validation - should be more than just numbers
+        if formatted_name and not formatted_name.isdigit() and len(formatted_name) > 2:
+            return formatted_name
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error extracting name from URL {futbin_url}: {e}")
+        return None
+    
     def extract_card_from_row(self, row, player_links):
         """Extract card data from a table row"""
         try:
@@ -683,8 +717,12 @@ class FutbinPriceMonitor:
         # Title exactly like the image
         title = "FutBin Error Found 🔍"
         
-        # Make sure we're using the actual player NAME, not the rating
-        player_name = card_info.get('name', 'Unknown Player')
+        # Try to get name from database first, then extract from URL if needed
+        player_name = card_info.get('name', '')
+        if not player_name or player_name.isdigit() or len(player_name) < 3:
+            # Database name is unreliable, extract from URL
+            extracted_name = self.extract_player_name_from_url(card_info.get('futbin_url'))
+            player_name = extracted_name if extracted_name else 'Unknown Player'
         
         # Description with exact format from image - using PLAYER NAME not rating
         description = f"""**Player**
