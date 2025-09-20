@@ -823,7 +823,7 @@ Raw Profit: {gap_info['raw_profit']:,} | EA Tax: {gap_info['ea_tax']:,} | Net: {
         conn.close()
         return True
     
-    def get_cards_to_monitor(self, limit=100):
+    def get_cards_to_monitor(self, limit=1000):
         """Get cards from database to monitor for price gaps - focuses on viable trading cards"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
