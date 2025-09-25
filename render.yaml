@@ -1,15 +1,23 @@
 services:
   - type: web
-    name: futbin-monitor
+    name: fut-gg-extinct-monitor
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: python app.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-    disk:
-      name: futbin-data
-      mountPath: /opt/render/project/src
-      sizeGB: 1
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: MONITORING_CYCLE_INTERVAL
+        value: "10"
+      - key: ALERT_COOLDOWN_HOURS
+        value: "6"
+      - key: MAX_PAGES_TO_SCRAPE
+        value: "10"
+      - key: CARDS_TO_MONITOR_PER_CYCLE
+        value: "30"
+      - key: SEND_CYCLE_SUMMARIES
+        value: "true"
